@@ -1,0 +1,10 @@
+services:
+  agent:
+    build: .
+    stdin_open: true   # Keeps stdin open so you can type to the agent
+    tty: true          # Allocates a terminal
+    volumes:
+      - ./workspace:/app/workspace  # Agent works in this folder - safe sandbox
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - WORKSPACE_DIR=/app/workspace

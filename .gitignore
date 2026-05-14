@@ -1,0 +1,18 @@
+# Secrets
+.env
+
+# Claude
+.claude/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# macOS
+.DS_Store
+
+# Workspace — keep folder but not contents
+part_1/workspace/*
+!part_1/workspace/.gitkeep

@@ -1,0 +1,13 @@
+services:
+  agent:
+    build: .
+    environment:
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - MODEL=${MODEL:-anthropic/claude-sonnet-4-6}
+      - WORKSPACE_DIR=/app/workspace
+      - MAX_OUTPUT=${MAX_OUTPUT:-5000}
+      - MAX_ROUNDS=${MAX_ROUNDS:-20}
+    volumes:
+      - ./workspace:/app/workspace
+    stdin_open: true
+    tty: true

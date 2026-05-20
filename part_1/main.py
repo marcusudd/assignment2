@@ -36,7 +36,9 @@ def validate_startup() -> None:
 # ---------------------------------------------------------------------------
 def load_system_prompt(path: str = "system_prompt.txt") -> str:
     with open(path, "r") as f:
-        return f.read()
+        text = f.read()
+    workspace_abs = os.path.abspath(WORKSPACE_DIR)
+    return text.replace("{workspace_dir}", workspace_abs)
 
 # ---------------------------------------------------------------------------
 # XML Parsing - Homemade function calling
@@ -95,7 +97,11 @@ def call_llm(messages: list, system_prompt: str) -> tuple[str, str]:
 # ---------------------------------------------------------------------------
 # Command execution with safety check
 # ---------------------------------------------------------------------------
+_CHAIN_OPERATORS = re.compile(r"(?:^|[^|&])(&&|\|\||;|&|\|)(?:[^|&]|$)")
+
 def execute_command(command: str) -> str:
+    if _CHAIN_OPERATORS.search(command):
+        return "RULE VIOLATION: Command contains chaining operators (&&, ||, ;, |, &). Use one command per action."
     print(f"\n🔧 Agent wants to run: {command}")
     approval = input("   Execute? (y/n): ").strip().lower()
     if approval != "y":

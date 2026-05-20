@@ -20,8 +20,8 @@ Rules:
 - Only ONE action per response
 - STOP generating immediately after </action>. Do NOT write your own "Observation:" or guess what the command will output. Do NOT include <answer> in the same response as <action>.
 - The real observation will be provided to you in the next user message inside <observation> tags. Only then may you reason about the result and decide the next step.
-- Work inside the /app/workspace directory only
-- Never run commands that delete files outside /app/workspace
+- Work inside the {workspace_dir} directory only
+- Never run commands that delete files outside {workspace_dir}
 - Never run commands that modify system files
 - Never run commands that install software globally without user approval
 - If a command seems risky, explain what it does and ask for confirmation

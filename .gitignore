@@ -1,5 +1,7 @@
 # Secrets
 .env
+th25-hub-connection.md
+connect_runpod_convo.txt
 
 # Claude
 .claude/

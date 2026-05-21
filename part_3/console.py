@@ -82,3 +82,6 @@ class AgentState:
         self.token_counter = token_counter
         self.token_signoff_sent: bool = False
         self.soft_limit_logged: bool = False
+        # Track the last canned-fallback message so we don't repeat it back-to-back
+        self.last_canned_at: float = 0.0
+        self.last_canned_text: str = ""

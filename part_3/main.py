@@ -260,8 +260,22 @@ def main() -> None:
             log.info("← retry reply: %s", reply[:120] if reply != "PASS" else "PASS")
 
         if reply == "PASS" and mentioned_me:
-            reply = "On it! I'll take care of my part now."
-            log.info("fallback reply used (still PASS after retry)")
+            # Don't repeat the same canned ack within 60s — go silent instead
+            canned = "On it! I'll take care of my part now."
+            now_ts = time.time()
+            recent_same = (
+                state.last_canned_text == canned
+                and (now_ts - state.last_canned_at) < 60
+            )
+            if recent_same:
+                log.info("skipping repeat canned ack (sent %ds ago) — PASS instead",
+                         int(now_ts - state.last_canned_at))
+                # leave reply = "PASS" — will hit the PASS-sleep below
+            else:
+                reply = canned
+                state.last_canned_text = canned
+                state.last_canned_at = now_ts
+                log.info("fallback reply used (still PASS after retry)")
 
         # For unaddressed tasks: nudge once to prevent total silence.
         # Skip nudge for short social messages (greetings etc.) — not SWE tasks.

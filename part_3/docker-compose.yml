@@ -14,80 +14,81 @@ services:
       timeout: 3s
       retries: 5
 
-  # ── Agent: mini_me1 (lowest delay → first to act on unaddressed tasks) ─────
-  mini-me-1:
+  # ── Agent: macmini1 (lowest delay → first to act on unaddressed tasks) ─────
+  macmini1:
     build: .
     depends_on:
       hub:
         condition: service_healthy
     environment:
-      AGENT_NAME: mini_me1
+      AGENT_NAME: macmini1
       AGENT_PERSONA: "You are a software engineer who writes code and gets things done."
       HUB_URL: http://hub:8080
       HUB_PASSWORD: th25-agents-vg
       DRY_RUN: "false"
       AUTO_APPROVE: "true"
       MSG_CAP: "10"
-      TOKEN_CAP: "30000"
-      RESPONSE_DELAY: "1"
+      TOKEN_CAP: "150000"
+      MAX_ROUNDS: "10"
+      RESPONSE_DELAY: "2"
       POLL_INTERVAL: "5"
-      MODEL: "openai/gpt-4o-mini"
+      MODEL: "anthropic/claude-haiku-4.5"
     env_file:
       - .env
     volumes:
-      - workspace:/app/workspace
+      - ./workspace:/app/workspace
       - ./logs:/app/logs
     restart: on-failure:3
 
-  # ── Agent: mini_me2 (medium delay → complements mini_me1) ────────────────
-  mini-me-2:
+  # ── Agent: macmini2 (medium delay → complements macmini1) ────────────────
+  macmini2:
     build: .
     depends_on:
       hub:
         condition: service_healthy
     environment:
-      AGENT_NAME: mini_me2
+      AGENT_NAME: macmini2
       AGENT_PERSONA: "You are a software engineer who writes code and gets things done."
       HUB_URL: http://hub:8080
       HUB_PASSWORD: th25-agents-vg
       DRY_RUN: "false"
       AUTO_APPROVE: "true"
       MSG_CAP: "10"
-      TOKEN_CAP: "30000"
-      RESPONSE_DELAY: "5"
+      TOKEN_CAP: "150000"
+      MAX_ROUNDS: "10"
+      RESPONSE_DELAY: "30"
       POLL_INTERVAL: "5"
-      MODEL: "openai/gpt-4o-mini"
+      MODEL: "anthropic/claude-haiku-4.5"
     env_file:
       - .env
     volumes:
-      - workspace:/app/workspace
+      - ./workspace:/app/workspace
       - ./logs:/app/logs
     restart: on-failure:3
 
-  # ── Agent: mini_me3 (highest delay → fills remaining gaps) ────────────────
-  mini-me-3:
+  # ── Agent: macmini3 (highest delay → fills remaining gaps) ────────────────
+  macmini3:
     build: .
     depends_on:
       hub:
         condition: service_healthy
     environment:
-      AGENT_NAME: mini_me3
+      AGENT_NAME: macmini3
       AGENT_PERSONA: "You are a software engineer who writes code and gets things done."
       HUB_URL: http://hub:8080
       HUB_PASSWORD: th25-agents-vg
       DRY_RUN: "false"
       AUTO_APPROVE: "true"
       MSG_CAP: "10"
-      TOKEN_CAP: "30000"
-      RESPONSE_DELAY: "9"
+      TOKEN_CAP: "150000"
+      MAX_ROUNDS: "10"
+      RESPONSE_DELAY: "60"
       POLL_INTERVAL: "5"
-      MODEL: "openai/gpt-4o-mini"
+      MODEL: "anthropic/claude-haiku-4.5"
     env_file:
       - .env
     volumes:
-      - workspace:/app/workspace
+      - ./workspace:/app/workspace
       - ./logs:/app/logs
     restart: on-failure:3
 
-volumes:
-  workspace:

@@ -10,6 +10,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 import agent
 import hub
+import main
 from console import AgentState, Console
 from agent import TokenCounter
 
@@ -44,6 +45,48 @@ class TestTokenCounter:
         tc.cap = 200
         assert not tc.exceeded()
 
+    def test_soft_exceeded_below_threshold(self):
+        tc = TokenCounter(cap=1000)
+        tc.add(749)
+        assert not tc.soft_exceeded()
+
+    def test_soft_exceeded_at_threshold(self):
+        tc = TokenCounter(cap=1000)
+        tc.add(750)
+        assert tc.soft_exceeded()
+
+    def test_soft_exceeded_above_threshold(self):
+        tc = TokenCounter(cap=1000)
+        tc.add(800)
+        assert tc.soft_exceeded()
+        assert not tc.hard_exceeded()
+
+    def test_hard_exceeded_below_threshold(self):
+        tc = TokenCounter(cap=1000)
+        tc.add(899)
+        assert not tc.hard_exceeded()
+
+    def test_hard_exceeded_at_threshold(self):
+        tc = TokenCounter(cap=1000)
+        tc.add(900)
+        assert tc.hard_exceeded()
+
+    def test_tier_ordering(self):
+        tc = TokenCounter(cap=1000)
+        tc.add(600)
+        assert not tc.soft_exceeded()
+        assert not tc.hard_exceeded()
+        assert not tc.exceeded()
+        tc.add(200)  # now at 800
+        assert tc.soft_exceeded()
+        assert not tc.hard_exceeded()
+        tc.add(100)  # now at 900
+        assert tc.soft_exceeded()
+        assert tc.hard_exceeded()
+        assert not tc.exceeded()
+        tc.add(100)  # now at 1000
+        assert tc.exceeded()
+
 
 # ---------------------------------------------------------------------------
 # AgentState
@@ -63,6 +106,93 @@ class TestAgentState:
         s = AgentState(msg_cap=5, token_counter=tc)
         s.msg_cap = 20
         assert s.msg_cap == 20
+
+
+# ---------------------------------------------------------------------------
+# looks_duplicate — anti-duplication final-check
+# ---------------------------------------------------------------------------
+class TestLooksDuplicate:
+    def test_same_file_same_action_is_duplicate(self):
+        reply = "I created `app.py` with a Flask route."
+        others = [{"agent_name": "other", "content": "I created `app.py` for the API."}]
+        assert main.looks_duplicate(reply, others) is True
+
+    def test_same_file_different_actions_still_duplicate(self):
+        reply = "I created `models.py`."
+        others = [{"agent_name": "other", "content": "I verified `models.py` works."}]
+        assert main.looks_duplicate(reply, others) is True
+
+    def test_different_files_not_duplicate(self):
+        reply = "I created `auth.py` with login logic."
+        others = [{"agent_name": "other", "content": "I created `routes.py`."}]
+        assert main.looks_duplicate(reply, others) is False
+
+    def test_no_file_in_reply_not_duplicate(self):
+        reply = "Hi, what should we build?"
+        others = [{"agent_name": "other", "content": "I created `app.py`."}]
+        assert main.looks_duplicate(reply, others) is False
+
+    def test_no_action_in_reply_not_duplicate(self):
+        reply = "The file `app.py` looks interesting."
+        others = [{"agent_name": "other", "content": "I created `app.py`."}]
+        assert main.looks_duplicate(reply, others) is False
+
+    def test_empty_others_not_duplicate(self):
+        assert main.looks_duplicate("I created `app.py`", []) is False
+
+    def test_identical_text_is_duplicate(self):
+        reply = "Hi — what should we build?"
+        others = [{"agent_name": "other", "content": "Hi — what should we build?"}]
+        assert main.looks_duplicate(reply, others) is True
+
+    def test_near_identical_verifications_are_duplicate(self):
+        reply = "I examined the file structure and found the following files in todo_api: app.py, requirements.txt"
+        others = [{"agent_name": "other", "content": "I checked the file structure and found the following files in todo_api: app.py, requirements.txt"}]
+        assert main.looks_duplicate(reply, others) is True
+
+    def test_very_short_messages_not_duplicate(self):
+        # Avoid false positives on short greetings like "ok" "hi"
+        reply = "ok"
+        others = [{"agent_name": "other", "content": "ok"}]
+        assert main.looks_duplicate(reply, others) is False
+
+    def test_different_text_not_duplicate(self):
+        reply = "I'll handle the database schema design"
+        others = [{"agent_name": "other", "content": "Working on the frontend templates now"}]
+        assert main.looks_duplicate(reply, others) is False
+
+
+# ---------------------------------------------------------------------------
+# Operator command detection
+# ---------------------------------------------------------------------------
+class TestOperatorDetection:
+    def test_latest_operator_command_finds_last(self):
+        msgs = [
+            {"agent_name": "human-operator", "content": "first command"},
+            {"agent_name": "macmini1", "content": "ok"},
+            {"agent_name": "human-operator", "content": "second command"},
+        ]
+        assert main.latest_operator_command(msgs) == "second command"
+
+    def test_latest_operator_command_recognizes_graderbot(self):
+        msgs = [{"agent_name": "graderbot", "content": "build something"}]
+        assert main.latest_operator_command(msgs) == "build something"
+
+    def test_latest_operator_command_none_when_only_agents(self):
+        msgs = [{"agent_name": "macmini1", "content": "hello"}]
+        assert main.latest_operator_command(msgs) is None
+
+    def test_has_imperative_detects_build(self):
+        assert main.has_imperative("Please build a Flask app") is True
+
+    def test_has_imperative_detects_delete(self):
+        assert main.has_imperative("Delete the old stuff") is True
+
+    def test_has_imperative_false_for_greeting(self):
+        assert main.has_imperative("hello everyone") is False
+
+    def test_has_imperative_false_for_none(self):
+        assert main.has_imperative(None) is False
 
 
 # ---------------------------------------------------------------------------

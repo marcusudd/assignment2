@@ -1,0 +1,211 @@
+Part 3 — Viktiga kommandon
+==========================
+
+Kör alltid från: assignment2/part_3/
+
+Slutgiltig konfig:
+  MODEL=anthropic/claude-haiku-4.5
+  MAX_ROUNDS=10
+  TOKEN_CAP=150000
+  max_tokens=2048 (i agent.py)
+
+
+═══════════════════════════════════════════════════════════════════
+DOCKER CLEANUP (kör vid behov — frigör diskutrymme)
+═══════════════════════════════════════════════════════════════════
+
+# Lista alla part_3-images för översikt
+docker images | grep part_3
+
+# Ta bort gamla images (om du bytt namn på services i compose)
+docker rmi part_3-mini-me-1:latest part_3-mini-me-2:latest part_3-mini-me-3:latest
+
+# Rensa oanvänd byggcache och dangling images
+docker builder prune -f
+docker image prune -f
+
+# Disk-användning före/efter
+docker system df
+
+
+═══════════════════════════════════════════════════════════════════
+LOKALT TEST (mock hub + 3 agenter)
+═══════════════════════════════════════════════════════════════════
+
+# 1. Ren omstart (gör ALLTID detta mellan testkörningar)
+docker compose down
+find workspace -mindepth 1 ! -name '.gitkeep' -delete
+rm -f logs/macmini*.log
+
+# 2. Bygg och starta (i förgrunden — Ctrl+C för att stoppa)
+docker compose up --build
+
+# Eller i bakgrunden med detached:
+docker compose up -d --build
+
+# 3. Posta en testuppgift (separat terminal)
+curl -s -X POST http://localhost:8080/api/message \
+  -H "Content-Type: application/json" \
+  -d '{"agent_name":"human-operator","content":"Build a Python CLI tool that converts a JSON file to CSV","password":"th25-agents-vg"}'
+
+# 4. Övervaka (separata terminaler)
+tail -f logs/macmini1.log
+tail -f logs/macmini2.log
+tail -f logs/macmini3.log
+
+# Dashboard i webbläsaren
+http://localhost:8080
+
+# 5. Stoppa när klar
+docker compose down
+
+# Varför rensa workspace/logs mellan körningar?
+# - Mock hub är in-memory (docker compose down rensar meddelandena)
+# - Workspace-filer ligger kvar på disk tills de tas bort
+# - LLM-historiken nollställs automatiskt vid omstart
+
+
+═══════════════════════════════════════════════════════════════════
+LIVE HUB — Hell's Agents Hub (examinationen 2026-05-29)
+═══════════════════════════════════════════════════════════════════
+
+Hub-info (från th25-hub-connection.md):
+  URL:         https://wb48jtfnjng6on-8080.proxy.runpod.net
+  Password:    th25-agents-vg
+  Dashboard:   öppna URL i webbläsaren
+  Limits:      10 msgs/agent · 500 totalt · 1 req/sec · 4096 chars/msg
+  Namnregel:   yourname-rolename (t.ex. marcus-macmini1)
+
+OBS: Mock hub (docker compose hub-tjänst) ska INTE startas mot live hub.
+     Live hub körs på RunPod — den finns redan. Agenten kopplas UPP till den.
+
+
+───── ALTERNATIV 1: Enskild agent via Python (enklast, rekommenderas) ─────
+
+Steg 1 — Uppdatera .env (eller skapa den):
+  OPENROUTER_API_KEY=<din nyckel>
+  AGENT_NAME=marcus-macmini1
+  HUB_URL=https://wb48jtfnjng6on-8080.proxy.runpod.net
+  HUB_PASSWORD=th25-agents-vg
+  DRY_RUN=false
+  MODEL=openai/gpt-4o-mini
+  MSG_CAP=10
+  TOKEN_CAP=100000
+  POLL_INTERVAL=4
+  RESPONSE_DELAY=2
+
+Steg 2 — Verifiera anslutning innan exam (curl):
+  curl "https://wb48jtfnjng6on-8080.proxy.runpod.net/api/stats?password=th25-agents-vg"
+  # Förväntat: JSON med per_agent, total_messages osv. → 200 OK
+  # Vid 401: fel password. Vid timeout: hubben är nere.
+
+Steg 3 — Starta agenten:
+  .venv/bin/python main.py
+
+Steg 4 — (separat terminal) övervaka:
+  tail -f logs/marcus-macmini1.log
+
+
+───── ALTERNATIV 2: 3 agenter via Docker mot live hub ─────
+
+Steg 1 — Skapa docker-compose.live.yml (kopia av docker-compose.yml men):
+  - Ta bort "hub:" service helt
+  - Ta bort "depends_on: hub:" från varje agent
+  - Ändra "HUB_URL: http://hub:8080" → "HUB_URL: https://wb48jtfnjng6on-8080.proxy.runpod.net"
+  - Ändra agentnamn till marcus-macmini1, marcus-macmini2, marcus-macmini3
+
+Steg 2 — Kör med live-compose:
+  docker compose -f docker-compose.live.yml down
+  find workspace -mindepth 1 ! -name '.gitkeep' -delete
+  rm -f logs/marcus-macmini*.log
+  docker compose -f docker-compose.live.yml up --build
+
+Steg 3 — Övervaka (separat terminal):
+  tail -f logs/marcus-macmini1.log
+
+
+───── Förberedande kontroll (kör flera dagar före exam) ─────
+
+# Verifiera att hub svarar
+curl -s "https://wb48jtfnjng6on-8080.proxy.runpod.net/api/stats?password=th25-agents-vg" | head -5
+
+# Verifiera att din .env är korrekt utan att läcka secrets
+grep -E "^(AGENT_NAME|HUB_URL|DRY_RUN|MODEL|MSG_CAP|TOKEN_CAP)" .env
+
+# Smoke-test mot live hub: starta agenten kort och avbryt med Ctrl+C när
+# du ser "fast-forward" i loggen → då är anslutningen OK
+.venv/bin/python main.py
+
+
+═══════════════════════════════════════════════════════════════════
+TESTER
+═══════════════════════════════════════════════════════════════════
+
+# Kör alla tester (134 totalt)
+.venv/bin/pytest tests/ -q
+
+# Enstaka testfil
+.venv/bin/pytest tests/test_main.py -v
+
+
+═══════════════════════════════════════════════════════════════════
+LOGGAR
+═══════════════════════════════════════════════════════════════════
+
+# Live-övervakning (lokala namn macmini1/2/3 eller live marcus-macmini1)
+tail -f logs/macmini1.log
+tail -f logs/marcus-macmini1.log
+
+# Sökmönster — fånga viktiga händelser
+grep "SENT\|PASS\|token\|ABORT\|@" logs/marcus-macmini1.log
+
+
+═══════════════════════════════════════════════════════════════════
+CONSOLE-KOMMANDON (medan agenten kör)
+═══════════════════════════════════════════════════════════════════
+
+status          visa tokens / meddelanden / paus-läge
+cap 200000      höj token-taket live (om du behöver mer budget mid-exam)
+limit 15        höj meddelandetaket
+pause           pausa agenten (slutar reagera men håller anslutningen)
+resume          återuppta
+y / n           godkänn / neka bash (om AUTO_APPROVE=false)
+quit            stäng ner agenten rent
+
+
+═══════════════════════════════════════════════════════════════════
+TOKEN-NIVÅER (tre-stegs budget)
+═══════════════════════════════════════════════════════════════════
+
+  0–75%    Normal körning
+  75–90%   Soft limit — nudge och retries avstängda (sparar tokens)
+  90%+     Hard limit — agenten skickar sign-off och tystnar
+
+
+═══════════════════════════════════════════════════════════════════
+AGENT-NAMNGIVNING
+═══════════════════════════════════════════════════════════════════
+
+LOKAL (mock hub):  macmini1, macmini2, macmini3
+LIVE (Hell's Hub): marcus-macmini1, marcus-macmini2, marcus-macmini3
+
+Format för live: yourname-rolename
+Förbjudna namn:  my-agent, agent, test, bot, eller andra generiska namn
+
+
+═══════════════════════════════════════════════════════════════════
+NÖDLÄGE UNDER EXAMEN
+═══════════════════════════════════════════════════════════════════
+
+# Agenten spammar / gör fel — pausa direkt
+pause
+
+# Tokens tar slut för fort
+cap 300000
+
+# Vill starta om utan att förlora hub-anslutningen
+quit
+.venv/bin/python main.py
+
+# Helt nödstop
+Ctrl+C

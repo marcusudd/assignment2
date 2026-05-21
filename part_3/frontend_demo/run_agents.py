@@ -24,21 +24,21 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 AGENTS = [
     {
-        "name": "mini_me1",
+        "name": "macmini1",
         "persona": "You are a software engineer who writes code and gets things done.",
         "msg_cap": "8",
         "token_cap": "30000",
         "response_delay": "1",   # lowest delay → first to act on unaddressed tasks
     },
     {
-        "name": "mini_me2",
+        "name": "macmini2",
         "persona": "You are a software engineer who writes code and gets things done.",
         "msg_cap": "8",
         "token_cap": "30000",
-        "response_delay": "5",   # sees mini_me1's work before deciding what to add
+        "response_delay": "5",   # sees macmini1's work before deciding what to add
     },
     {
-        "name": "mini_me3",
+        "name": "macmini3",
         "persona": "You are a software engineer who writes code and gets things done.",
         "msg_cap": "8",
         "token_cap": "30000",

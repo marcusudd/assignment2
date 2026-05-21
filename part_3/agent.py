@@ -37,7 +37,7 @@ bash_approval = BashApproval()
 MODEL = os.getenv("MODEL", "anthropic/claude-sonnet-4-6")
 WORKSPACE_DIR = os.getenv("WORKSPACE_DIR", "./workspace")
 MAX_OUTPUT = int(os.getenv("MAX_OUTPUT", "5000"))
-MAX_ROUNDS = int(os.getenv("MAX_ROUNDS", "10"))
+MAX_ROUNDS = int(os.getenv("MAX_ROUNDS", "6"))
 DEBUG = os.getenv("DEBUG", "").lower() in ("1", "true")
 AUTO_APPROVE = os.getenv("AUTO_APPROVE", "false").lower() in ("1", "true")
 AGENT_NAME = os.getenv("AGENT_NAME", "mini_me1")
@@ -219,13 +219,18 @@ def tool_edit_file(path: str, old_str: str, new_str: str) -> str:
 
 
 def dispatch_tool(name: str, inputs: dict) -> str:
-    if name == "bash":
-        return tool_bash(inputs["command"])
-    if name == "read_file":
-        return tool_read_file(inputs["path"])
-    if name == "edit_file":
-        return tool_edit_file(inputs["path"], inputs["old_str"], inputs["new_str"])
-    return f"ERROR: unknown tool '{name}'"
+    try:
+        if name == "bash":
+            return tool_bash(inputs["command"])
+        if name == "read_file":
+            return tool_read_file(inputs["path"])
+        if name == "edit_file":
+            return tool_edit_file(inputs["path"], inputs["old_str"], inputs["new_str"])
+        return f"ERROR: unknown tool '{name}'"
+    except KeyError as e:
+        return f"ERROR: tool '{name}' called with missing argument {e}. Required args: bash needs 'command', read_file needs 'path', edit_file needs 'path'+'old_str'+'new_str'."
+    except Exception as e:
+        return f"ERROR: tool '{name}' failed: {e}"
 
 
 # ---------------------------------------------------------------------------
@@ -239,7 +244,7 @@ def _call_llm(messages: list, system_prompt: str):
             api_key=os.getenv("OPENROUTER_API_KEY"),
         ).chat.completions.create(
             model=MODEL,
-            max_tokens=1024,
+            max_tokens=2048,
             tools=TOOLS,
             messages=all_messages,
         )
@@ -263,7 +268,7 @@ def decide(
     May call tools before composing the reply.
     Tracks token usage via token_counter.
     """
-    # Self-echo guard: if the last 3 messages are all from us, force PASS
+    # Self-echo guard: defence-in-depth in case caller passes unfiltered messages
     if len(new_messages) >= 3 and all(m["agent_name"] == own_name for m in new_messages[-3:]):
         return "PASS"
 
@@ -273,14 +278,24 @@ def decide(
         context_lines.append(f"[{msg['agent_name']}]: {msg['content']}")
     context = "\n".join(context_lines)
 
+    # Inject agent registry so LLM uses real names in @mentions, not literal "@agent-name"
+    agent_names = sorted({m["agent_name"] for m in new_messages
+                          if m["agent_name"] != own_name})
+    if agent_names:
+        registry = "Other agents currently in chat: " + ", ".join(f"@{n}" for n in agent_names)
+        context = registry + "\n\n" + context
+
     # Add to local history
     history.append({"role": "user", "content": context})
 
-    # Cap history to prevent context overflow (keep newest 40 entries)
-    if len(history) > 40:
-        history[:] = history[-40:]
+    # Cap history to prevent context overflow (keep newest 24 entries ≈ 4 response cycles)
+    if len(history) > 24:
+        history[:] = history[-24:]
 
     # Run the agent loop (tools allowed)
+    tools_used = False
+    report_forced = False
+    this_turn_tools: list[str] = []  # Track for auto-fallback if LLM refuses to report
     for _ in range(MAX_ROUNDS):
         response = _call_llm(history, system_prompt)
         if response is None or not response.choices:
@@ -305,30 +320,77 @@ def decide(
             ]
         history.append(assistant_entry)
 
+        # Normalize finish_reason across providers (Anthropic via OpenRouter may return
+        # "end_turn", "tool_use", "max_tokens" etc. instead of OpenAI-style values).
+        # Trust the actual message shape: tool_calls present → tool round; otherwise → stop.
+        if msg.tool_calls:
+            finish_reason = "tool_calls"
+        elif finish_reason not in ("stop", "tool_calls"):
+            finish_reason = "stop"
+
         if finish_reason == "stop":
             reply = (msg.content or "").strip()
             if not reply:
-                # Tools were used but no text response — should not happen, but
-                # return PASS rather than posting an empty message
+                # Empty reply: if tools were used, generate fallback instead of going silent
+                if tools_used and this_turn_tools:
+                    actions = this_turn_tools[-4:]
+                    print("[decide] empty reply after tools — using auto-fallback", file=sys.stderr)
+                    return f"[auto-summary] Actions this turn: {'; '.join(actions)}."
                 return "PASS"
+            # If LLM used tools but said PASS, force one retry demanding a report
+            if reply.upper() == "PASS" and tools_used and not report_forced:
+                report_forced = True
+                print(f"[decide] tools used but LLM said PASS — forcing report retry", file=sys.stderr)
+                history.append({
+                    "role": "user",
+                    "content": (
+                        "You called tools this turn — that means you did work or "
+                        "investigated the workspace. You MUST report what you did or "
+                        "found in 2-3 sentences. Do not say PASS. Write your report now."
+                    ),
+                })
+                continue
+            # Retry failed; if tools were used, generate auto-fallback so chat isn't silent
+            if reply.upper() == "PASS" and tools_used and this_turn_tools:
+                actions = this_turn_tools[-4:]
+                fallback = f"[auto-summary] Actions this turn: {'; '.join(actions)}."
+                print(f"[decide] LLM refused report after tools — using auto-fallback", file=sys.stderr)
+                return fallback
             return "PASS" if reply.upper() == "PASS" else reply
 
         if finish_reason == "tool_calls":
+            tools_used = True
             for tc in msg.tool_calls:
                 inputs = json.loads(tc.function.arguments)
                 result = dispatch_tool(tc.function.name, inputs)
                 if DEBUG:
                     print(f"  [tool] {tc.function.name} → {result[:80]}")
+                # Track for auto-fallback
+                tname = tc.function.name
+                if tname == "bash":
+                    this_turn_tools.append(f"ran `{inputs.get('command', '')[:60]}`")
+                elif tname == "edit_file":
+                    this_turn_tools.append(f"edited `{inputs.get('path', '?')}`")
+                elif tname == "read_file":
+                    this_turn_tools.append(f"read `{inputs.get('path', '?')}`")
+                # Store trimmed result in history — full output already seen by LLM this round.
+                history_content = result if len(result) <= 300 else result[:297] + "…"
                 history.append({
                     "role": "tool",
                     "tool_call_id": tc.id,
-                    "content": result,
+                    "content": history_content,
                 })
             continue
 
         _rollback(history)
         return "PASS"
 
+    # MAX_ROUNDS exhausted without "stop" — if tools were used, generate fallback report
+    if tools_used and this_turn_tools:
+        actions = this_turn_tools[-4:]
+        fallback = f"[auto-summary] Actions this turn: {'; '.join(actions)} (max rounds reached)."
+        print("[decide] MAX_ROUNDS reached with tools — using auto-fallback", file=sys.stderr)
+        return fallback
     _rollback(history)
     return "PASS"
 
@@ -336,6 +398,8 @@ def decide(
 def _rollback(history: list) -> None:
     while history and history[-1]["role"] in ("tool", "assistant"):
         history.pop()
+
+
 
 
 def load_system_prompt() -> str:
@@ -362,3 +426,9 @@ class TokenCounter:
 
     def exceeded(self) -> bool:
         return self.total >= self.cap
+
+    def soft_exceeded(self) -> bool:
+        return self.total >= self.cap * 0.75
+
+    def hard_exceeded(self) -> bool:
+        return self.total >= self.cap * 0.90

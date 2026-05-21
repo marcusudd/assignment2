@@ -80,3 +80,5 @@ class AgentState:
         self.paused: bool = False
         self.running: bool = True
         self.token_counter = token_counter
+        self.token_signoff_sent: bool = False
+        self.soft_limit_logged: bool = False

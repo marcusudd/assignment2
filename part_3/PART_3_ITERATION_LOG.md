@@ -195,3 +195,25 @@ Logs preserved in:
 - `logs/haiku-iter1-5-*.log` — Haiku attempts (none produced files)
 - `logs/sonnet-iter1-*.log` — Sonnet attempt (empty files)
 
+---
+
+## Final post-review pass (after dual_pass + commit_review)
+
+Three behavioural regressions surfaced in the last live log and were fixed:
+
+1. **`On it!` canned message looped** — when an agent was repeatedly @mentioned but kept producing PASS replies, the canned fallback "On it! I'll take care of my part now." was sent on every cycle. Fix: AgentState tracks last_canned_text + last_canned_at. Same canned within 60s → fall through to PASS (silent) instead of repeating.
+
+2. **System-prompt step headers leaked into chat output** — Haiku copied `### Step 1`, `### Step 2 — GAP ANALYSIS` etc. as the first line of its messages. Fix: rewrote the prompt with a plain numbered list (no `###` markdown headers) and added an OUTPUT STYLE section at the top explicitly forbidding "Step N" labels in chat output, with good/bad examples.
+
+3. **No "task completed → go silent" state** — after delivering the requested artefact, agents kept looping "Step 2 — GAP ANALYSIS" until tokens ran out. Fix: new PASS rule (e) TASK COMPLETED: if operator's task is delivered, files exist+run, success was reported, and no new operator command pending → PASS silently.
+
+Plus robustness improvements:
+- Hub fetch/send do one retry on Timeout / ConnectionError / 5xx (NOT on 429 or 4xx)
+- Stale defaults in agent.py aligned with docker-compose (haiku-4.5, MAX_ROUNDS=10, macmini1)
+
+Final empirical test (after all fixes):
+- 4 substantive messages from 3 agents, no duplicates, no canned-ack loop
+- json2csv.py created, verified, runs cleanly
+- Output: `name,exam,ready / Marcus,part3,True`
+- 151 unit tests green
+

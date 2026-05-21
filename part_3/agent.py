@@ -34,13 +34,13 @@ class BashApproval:
 
 bash_approval = BashApproval()
 
-MODEL = os.getenv("MODEL", "anthropic/claude-sonnet-4-6")
+MODEL = os.getenv("MODEL", "anthropic/claude-haiku-4.5")
 WORKSPACE_DIR = os.getenv("WORKSPACE_DIR", "./workspace")
 MAX_OUTPUT = int(os.getenv("MAX_OUTPUT", "5000"))
-MAX_ROUNDS = int(os.getenv("MAX_ROUNDS", "6"))
+MAX_ROUNDS = int(os.getenv("MAX_ROUNDS", "10"))
 DEBUG = os.getenv("DEBUG", "").lower() in ("1", "true")
 AUTO_APPROVE = os.getenv("AUTO_APPROVE", "false").lower() in ("1", "true")
-AGENT_NAME = os.getenv("AGENT_NAME", "mini_me1")
+AGENT_NAME = os.getenv("AGENT_NAME", "macmini1")
 
 TOOLS = [
     {

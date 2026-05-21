@@ -313,6 +313,38 @@ class TestHubSend:
 
 
 # ---------------------------------------------------------------------------
+# Hub retry logic
+# ---------------------------------------------------------------------------
+class TestHubRetry:
+    def test_retryable_5xx(self):
+        assert hub._retryable(500, None) is True
+        assert hub._retryable(502, None) is True
+        assert hub._retryable(503, None) is True
+
+    def test_not_retryable_4xx(self):
+        assert hub._retryable(400, None) is False
+        assert hub._retryable(401, None) is False
+        assert hub._retryable(404, None) is False
+        assert hub._retryable(429, None) is False
+
+    def test_not_retryable_2xx(self):
+        assert hub._retryable(200, None) is False
+
+    def test_retryable_timeout(self):
+        import requests as rq
+        assert hub._retryable(None, rq.Timeout()) is True
+        assert hub._retryable(None, rq.ConnectionError()) is True
+
+    def test_not_retryable_value_error(self):
+        assert hub._retryable(None, ValueError("boom")) is False
+
+    def test_not_retryable_non_int_status(self):
+        # Defensive: MagicMock-style status_code → no retry
+        assert hub._retryable("not an int", None) is False
+        assert hub._retryable(None, None) is False
+
+
+# ---------------------------------------------------------------------------
 # security_check (copied from Part 2 into agent.py)
 # ---------------------------------------------------------------------------
 class TestSecurityCheck:

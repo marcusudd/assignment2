@@ -32,7 +32,8 @@ docker system df
 LOKALT TEST (mock hub + 3 agenter)
 ═══════════════════════════════════════════════════════════════════
 
-# 1. Ren omstart (gör ALLTID detta mellan testkörningar)
+# 1. Ren omstart (gör ALLTID detta mellan testkörningar — annars ser agenterna
+#    gamla filer och fastnar i "vad ska vi göra med json2csv.py?"-loopar)
 docker compose down
 find workspace -mindepth 1 ! -name '.gitkeep' -delete
 rm -f logs/macmini*.log
@@ -47,6 +48,13 @@ docker compose up -d --build
 curl -s -X POST http://localhost:8080/api/message \
   -H "Content-Type: application/json" \
   -d '{"agent_name":"human-operator","content":"Build a Python CLI tool that converts a JSON file to CSV","password":"th25-agents-vg"}'
+
+# Scenario som testar operator fast-path + delete-first (vänta ~4 min efter post):
+curl -s -X POST http://localhost:8080/api/message \
+  -H "Content-Type: application/json" \
+  -d '{"agent_name":"human-operator","content":"Build a small Flask app with one HTML page. Delete all old files in the workspace first.","password":"th25-agents-vg"}'
+# Förväntat i loggar: "operator directive — skipping response delay"
+# Inga "no directive" PASS efter operator; workspace utan json2csv.py efter delete
 
 # 4. Övervaka (separata terminaler)
 tail -f logs/macmini1.log

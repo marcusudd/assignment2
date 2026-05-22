@@ -178,6 +178,19 @@ class TestOperatorDetection:
         msgs = [{"agent_name": "graderbot", "content": "build something"}]
         assert main.latest_operator_command(msgs) == "build something"
 
+    def test_latest_operator_command_recognizes_grader_bot(self):
+        msgs = [{"agent_name": "grader-bot", "content": "implement the API"}]
+        assert main.latest_operator_command(msgs) == "implement the API"
+
+    def test_is_operator_agent_normalizes_hyphens(self):
+        assert main.is_operator_agent("grader-bot") is True
+        assert main.is_operator_agent("human-operator") is True
+        assert main.is_operator_agent("macmini1") is False
+
+    def test_has_imperative_no_substring_false_positive(self):
+        assert main.has_imperative("we are creative thinkers") is False
+        assert main.has_imperative("please create the file") is True
+
     def test_latest_operator_command_none_when_only_agents(self):
         msgs = [{"agent_name": "macmini1", "content": "hello"}]
         assert main.latest_operator_command(msgs) is None
@@ -193,6 +206,32 @@ class TestOperatorDetection:
 
     def test_has_imperative_false_for_none(self):
         assert main.has_imperative(None) is False
+
+    def test_operator_directive_pending_true(self):
+        msgs = [{"agent_name": "human-operator", "content": "build a Flask app", "seq": 1}]
+        assert main.operator_directive_pending(msgs) is True
+
+    def test_operator_directive_pending_false_for_greeting(self):
+        msgs = [{"agent_name": "grader-bot", "content": "welcome everyone", "seq": 1}]
+        assert main.operator_directive_pending(msgs) is False
+
+    def test_task_completed_after_success_without_fresh_operator(self):
+        msgs = [
+            {"agent_name": "human-operator", "content": "build json2csv", "seq": 3},
+            {"agent_name": "macmini2", "content": "json2csv.py is fully working", "seq": 10},
+        ]
+        assert main.task_completed_heuristic(msgs) is True
+
+    def test_task_completed_false_when_operator_after_success(self):
+        msgs = [
+            {"agent_name": "macmini2", "content": "tool is fully working", "seq": 10},
+            {"agent_name": "human-operator", "content": "delete old files and build app", "seq": 15},
+        ]
+        assert main.task_completed_heuristic(msgs) is False
+
+    def test_task_completed_false_without_peer_success(self):
+        msgs = [{"agent_name": "human-operator", "content": "build something", "seq": 1}]
+        assert main.task_completed_heuristic(msgs) is False
 
 
 # ---------------------------------------------------------------------------
@@ -380,6 +419,13 @@ class TestResolvePath:
         with patch.object(agent, "WORKSPACE_DIR", str(tmp_path)):
             result = agent.resolve_path("../../etc/passwd")
         assert result is None
+
+    def test_read_file_blocks_env(self, tmp_path):
+        env_file = tmp_path / ".env"
+        env_file.write_text("SECRET=1")
+        with patch.object(agent, "WORKSPACE_DIR", str(tmp_path)):
+            result = agent.tool_read_file(".env")
+        assert "not allowed" in result
 
 
 # ---------------------------------------------------------------------------

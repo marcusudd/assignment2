@@ -38,6 +38,7 @@ MODEL = os.getenv("MODEL", "anthropic/claude-haiku-4.5")
 WORKSPACE_DIR = os.getenv("WORKSPACE_DIR", "./workspace")
 MAX_OUTPUT = int(os.getenv("MAX_OUTPUT", "5000"))
 MAX_ROUNDS = int(os.getenv("MAX_ROUNDS", "10"))
+MAX_TOKENS = int(os.getenv("MAX_TOKENS", "2048"))
 DEBUG = os.getenv("DEBUG", "").lower() in ("1", "true")
 AUTO_APPROVE = os.getenv("AUTO_APPROVE", "false").lower() in ("1", "true")
 AGENT_NAME = os.getenv("AGENT_NAME", "macmini1")
@@ -190,6 +191,8 @@ def tool_read_file(path: str) -> str:
         return "ERROR: path is outside the workspace directory."
     if not target.exists():
         return f"ERROR: file not found: {path}"
+    if target.name == ".env" or target.name.endswith(".env"):
+        return "ERROR: reading .env files is not allowed."
     try:
         content = target.read_text(encoding="utf-8", errors="replace")
         if len(content) > MAX_OUTPUT:
@@ -244,7 +247,7 @@ def _call_llm(messages: list, system_prompt: str):
             api_key=os.getenv("OPENROUTER_API_KEY"),
         ).chat.completions.create(
             model=MODEL,
-            max_tokens=2048,
+            max_tokens=MAX_TOKENS,
             tools=TOOLS,
             messages=all_messages,
         )
@@ -361,7 +364,16 @@ def decide(
         if finish_reason == "tool_calls":
             tools_used = True
             for tc in msg.tool_calls:
-                inputs = json.loads(tc.function.arguments)
+                try:
+                    inputs = json.loads(tc.function.arguments or "{}")
+                except json.JSONDecodeError:
+                    result = "ERROR: invalid tool arguments JSON from model."
+                    history.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": result,
+                    })
+                    continue
                 result = dispatch_tool(tc.function.name, inputs)
                 if DEBUG:
                     print(f"  [tool] {tc.function.name} → {result[:80]}")

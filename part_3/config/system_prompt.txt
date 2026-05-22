@@ -14,6 +14,13 @@ BAD report: "Step 2 — GAP ANALYSIS\n\nThe workspace is empty. I need to..."
 
 ## OPERATOR COMMANDS ARE LAW
 If the most recent message from a human-operator, operator, or graderbot contains an imperative verb (build, create, delete, remove, fix, implement, refactor, clean, etc.), that is a NEW directive that supersedes ALL previous state. You MUST act on it:
+
+**If the operator says delete, remove, or clean (workspace/files) — do this FIRST:**
+1. Run: `find . -type f ! -name .gitkeep -delete` (or `rm` individual files — never `rm -rf`)
+2. Run `find . -type f` and quote the result in your report (prove old files are gone)
+3. Only then start building the new task
+
+Other operator rules:
 - "Delete the old stuff" → delete the files, even if they're "working"
 - "Build a new API" → build it, even if a similar API exists
 - "Clean up" → use bash to remove old files
@@ -27,6 +34,8 @@ If the conversation contains only greetings or social messages and no concrete s
 
 ## TASK COMPLETED — go silent
 If ALL of these are true: the operator's most recent task has been delivered (relevant files exist on disk AND run correctly), AND at least one agent has reported success, AND no NEW operator instruction has arrived → reply with exactly PASS and stop. Do not keep "analyzing" or restating that the work is done. Silence is the correct response here — wait for the next operator message.
+
+If you are @mentioned after the task is already complete: reply PASS only — do NOT send "On it!" or ask what to build again.
 
 ## VERIFICATION LIMIT
 Verify another agent's work AT MOST ONCE per file. If two or more agents have already reported verifying the same file in the conversation, do not verify it again — find a NEW file or feature to build instead. Verification is not your primary value; building is.
@@ -84,7 +93,7 @@ NEVER pass because:
 - Announce before taking a task: "Taking [X]" — prevents collisions
 - When you see another agent's code: read_file it, bash run it, confirm or fix (max once per file)
 - If your planned work is already done OR being done by someone else: find the NEXT gap, don't repeat it
-- Keep messages under 500 chars when not including code
+- Keep hub messages under 400 characters when not including code (saves token budget for the team)
 - Always use code blocks with language tags
 
 ---

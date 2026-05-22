@@ -35,7 +35,19 @@ _IMPERATIVES = (
     "build", "create", "delete", "remove", "fix", "implement", "write",
     "add", "make", "update", "refactor", "rewrite", "clean", "rebuild",
 )
-_OPERATOR_NAMES = ("human-operator", "operator", "graderbot", "human")
+_OPERATOR_ALIASES = frozenset({
+    "humanoperator", "operator", "human", "graderbot", "grader",
+})
+_IMPERATIVE_RE = re.compile(
+    r"\b(" + "|".join(re.escape(w) for w in _IMPERATIVES) + r")\b",
+    re.IGNORECASE,
+)
+_MENTION_ME_RE = re.compile(rf"@{re.escape(AGENT_NAME)}\b")
+_SUCCESS_MARKERS = re.compile(
+    r"\b(complete|completed|working|delivered|verified|fully working|"
+    r"runs cleanly|full stack|is fully working)\b",
+    re.IGNORECASE,
+)
 
 
 def looks_duplicate(reply: str, others: list[dict]) -> bool:
@@ -62,19 +74,91 @@ def looks_duplicate(reply: str, others: list[dict]) -> bool:
     return False
 
 
+def is_operator_agent(agent_name: str) -> bool:
+    """True for human-operator, grader-bot, graderbot, etc."""
+    key = agent_name.lower().replace("-", "").replace("_", "")
+    return key in _OPERATOR_ALIASES
+
+
 def latest_operator_command(messages: list[dict]) -> str | None:
     """Return the most recent message from a human/operator/grader, or None."""
     for m in reversed(messages):
-        if m["agent_name"].lower() in _OPERATOR_NAMES:
+        if is_operator_agent(m["agent_name"]):
             return m["content"]
     return None
 
 
 def has_imperative(text: str | None) -> bool:
-    """True if text contains an imperative command verb."""
+    """True if text contains an imperative command verb (whole-word match)."""
     if not text:
         return False
-    return any(w in text.lower() for w in _IMPERATIVES)
+    return _IMPERATIVE_RE.search(text) is not None
+
+
+def operator_directive_pending(messages: list[dict]) -> bool:
+    """True when the latest operator/grader message contains an imperative directive."""
+    op_cmd = latest_operator_command(messages)
+    return has_imperative(op_cmd)
+
+
+def build_operator_prompt_section(op_cmd: str) -> str:
+    """Injected into the system prompt when an operator directive is active."""
+    return (
+        f"\n\n*** OPERATOR'S DIRECT COMMAND ***\n"
+        f'"{op_cmd[:300]}"\n'
+        f"The operator gave a direct directive above. You MUST act on it "
+        f"using your tools (bash, edit_file). If it says 'delete' or 'clean' — "
+        f"remove old workspace files first (e.g. find . -type f ! -name .gitkeep -delete), "
+        f"then confirm with find. If 'build' — build. 'Work already exists' is NOT a valid "
+        f"reason to PASS when the operator gives a NEW command.\n"
+    )
+
+
+def task_completed_heuristic(messages: list[dict]) -> bool:
+    """True when peers reported success and no fresher operator imperative is pending."""
+    latest_op_seq = -1
+    latest_op_imperative = False
+    for m in reversed(messages):
+        if is_operator_agent(m["agent_name"]):
+            latest_op_seq = m.get("seq", 0)
+            latest_op_imperative = has_imperative(m["content"])
+            break
+
+    last_success_seq = -1
+    for m in messages:
+        name = m["agent_name"].lower()
+        if is_operator_agent(m["agent_name"]) or name == AGENT_NAME.lower():
+            continue
+        if _SUCCESS_MARKERS.search(m["content"]):
+            last_success_seq = max(last_success_seq, m.get("seq", 0))
+
+    if last_success_seq < 0:
+        return False
+    if latest_op_imperative and latest_op_seq > last_success_seq:
+        return False
+    return True
+
+
+def _merge_rechecked_messages(
+    state: AgentState,
+    external: list[dict],
+    log,
+) -> list[dict]:
+    """Fetch messages since last_seen and append new peer messages to external."""
+    try:
+        rechecked = hub.fetch_messages(state.last_seen)
+    except Exception:
+        return external
+    if not rechecked:
+        return external
+    state.last_seen = rechecked[-1]["seq"]
+    new_from_others = [m for m in rechecked if m["agent_name"] != AGENT_NAME]
+    if new_from_others:
+        log.info("recheck: %d new msg(s) from others — adding to context", len(new_from_others))
+        for m in new_from_others:
+            log.info("  [%s]: %s", m["agent_name"], m["content"][:120])
+        external = external + new_from_others
+    return external
 
 
 def validate_startup() -> None:
@@ -167,6 +251,9 @@ def main() -> None:
         if soft_limit and not state.soft_limit_logged:
             log.info("soft token limit (75%%) — nudge/retries disabled")
             state.soft_limit_logged = True
+            if len(history) > 12:
+                history[:] = history[-12:]
+                log.info("history trimmed to %d entries (soft limit)", len(history))
 
         try:
             new_msgs = hub.fetch_messages(state.last_seen)
@@ -195,7 +282,7 @@ def main() -> None:
 
         # Mention routing: skip only if a message STARTS with @other (primary address).
         # Incidental @mentions mid-message ("great @mini_me2! now let's...") do not block.
-        mentioned_me = any(f"@{AGENT_NAME}" in m["content"] for m in external)
+        mentioned_me = any(_MENTION_ME_RE.search(m["content"]) for m in external)
         mentioned_other = (
             not mentioned_me and
             any(
@@ -211,28 +298,29 @@ def main() -> None:
             time.sleep(POLL_INTERVAL)
             continue
 
-        # Unaddressed task: wait RESPONSE_DELAY, then recheck — maybe someone
-        # else already claimed it, in which case we fold their response into context.
-        if not mentioned_me and RESPONSE_DELAY > 0:
+        op_cmd = latest_operator_command(external)
+        operator_directive = operator_directive_pending(external)
+
+        # Operator/grader directives skip stagger delay — highest priority (Del 3 smart participation).
+        if operator_directive:
+            log.info("operator directive — skipping response delay")
+            external = _merge_rechecked_messages(state, external, log)
+            op_cmd = latest_operator_command(external)
+        elif not mentioned_me and RESPONSE_DELAY > 0:
             jitter = random.uniform(0, RESPONSE_DELAY * 0.3)
             wait = RESPONSE_DELAY + jitter
             log.info("unaddressed task — waiting %.1fs before responding", wait)
             time.sleep(wait)
-            try:
-                rechecked = hub.fetch_messages(state.last_seen)
-                if rechecked:
-                    state.last_seen = rechecked[-1]["seq"]
-                    new_from_others = [m for m in rechecked if m["agent_name"] != AGENT_NAME]
-                    if new_from_others:
-                        log.info("recheck: %d new msg(s) from others — adding to context", len(new_from_others))
-                        for m in new_from_others:
-                            log.info("  [%s]: %s", m["agent_name"], m["content"][:120])
-                    external += new_from_others
-            except Exception:
-                pass
+            external = _merge_rechecked_messages(state, external, log)
+            op_cmd = latest_operator_command(external)
+            operator_directive = operator_directive_pending(external)
+            if operator_directive:
+                log.info("operator directive detected after recheck — applying priority")
 
         # When explicitly @mentioned, override PASS — the agent MUST respond.
         active_prompt = system_prompt
+        if operator_directive and op_cmd:
+            active_prompt += build_operator_prompt_section(op_cmd)
         if mentioned_me:
             active_prompt += (
                 f"\n\nOVERRIDE: @{AGENT_NAME} was directly mentioned in the messages above. "
@@ -260,22 +348,23 @@ def main() -> None:
             log.info("← retry reply: %s", reply[:120] if reply != "PASS" else "PASS")
 
         if reply == "PASS" and mentioned_me:
-            # Don't repeat the same canned ack within 60s — go silent instead
-            canned = "On it! I'll take care of my part now."
-            now_ts = time.time()
-            recent_same = (
-                state.last_canned_text == canned
-                and (now_ts - state.last_canned_at) < 60
-            )
-            if recent_same:
-                log.info("skipping repeat canned ack (sent %ds ago) — PASS instead",
-                         int(now_ts - state.last_canned_at))
-                # leave reply = "PASS" — will hit the PASS-sleep below
+            if task_completed_heuristic(external):
+                log.info("task completed — skipping canned ack, staying PASS")
             else:
-                reply = canned
-                state.last_canned_text = canned
-                state.last_canned_at = now_ts
-                log.info("fallback reply used (still PASS after retry)")
+                canned = "On it! I'll take care of my part now."
+                now_ts = time.time()
+                recent_same = (
+                    state.last_canned_text == canned
+                    and (now_ts - state.last_canned_at) < 60
+                )
+                if recent_same:
+                    log.info("skipping repeat canned ack (sent %ds ago) — PASS instead",
+                             int(now_ts - state.last_canned_at))
+                else:
+                    reply = canned
+                    state.last_canned_text = canned
+                    state.last_canned_at = now_ts
+                    log.info("fallback reply used (still PASS after retry)")
 
         # For unaddressed tasks: nudge once to prevent total silence.
         # Skip nudge for short social messages (greetings etc.) — not SWE tasks.
@@ -298,16 +387,7 @@ def main() -> None:
                 ws_files = "(workspace check failed)"
 
             op_cmd = latest_operator_command(external)
-            op_section = ""
-            if op_cmd and has_imperative(op_cmd):
-                op_section = (
-                    f"\n\n*** OPERATOR'S DIRECT COMMAND ***\n"
-                    f'"{op_cmd[:300]}"\n'
-                    f"The operator gave a direct directive above. You MUST act on it "
-                    f"using your tools (bash, edit_file). If it says 'delete' — delete. "
-                    f"If 'build' — build. 'Work already exists' is NOT a valid reason "
-                    f"to PASS when the operator gives a NEW command.\n"
-                )
+            op_section = build_operator_prompt_section(op_cmd) if op_cmd and has_imperative(op_cmd) else ""
 
             nudge_prompt = active_prompt + op_section + (
                 f"\n\nWORKSPACE FILES RIGHT NOW:\n{ws_files}\n\n"

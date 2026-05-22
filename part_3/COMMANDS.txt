@@ -34,6 +34,8 @@ LOKALT TEST (mock hub + 3 agenter)
 
 # 1. Ren omstart (gör ALLTID detta mellan testkörningar — annars ser agenterna
 #    gamla filer och fastnar i "vad ska vi göra med json2csv.py?"-loopar)
+./scripts/reset-local.sh
+# eller manuellt:
 docker compose down
 find workspace -mindepth 1 ! -name '.gitkeep' -delete
 rm -f logs/macmini*.log

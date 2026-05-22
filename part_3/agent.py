@@ -252,7 +252,12 @@ def _call_llm(messages: list, system_prompt: str):
             messages=all_messages,
         )
     except APIError as e:
-        print(f"[API error] {e}", file=sys.stderr)
+        print(f"[LLM API error] {e}", file=sys.stderr)
+        return None
+    except Exception as e:
+        # Catch transient network errors, TLS failures, malformed JSON from provider,
+        # etc. Decide() handles None gracefully (rollback + PASS).
+        print(f"[LLM unexpected error: {type(e).__name__}] {e}", file=sys.stderr)
         return None
 
 

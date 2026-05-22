@@ -38,6 +38,7 @@ _IMPERATIVES = (
 _OPERATOR_ALIASES = frozenset({
     "humanoperator", "operator", "human", "graderbot", "grader",
 })
+_OPERATOR_SUBSTRINGS = ("grader", "operator", "judge", "examiner", "human")
 _IMPERATIVE_RE = re.compile(
     r"\b(" + "|".join(re.escape(w) for w in _IMPERATIVES) + r")\b",
     re.IGNORECASE,
@@ -75,9 +76,16 @@ def looks_duplicate(reply: str, others: list[dict]) -> bool:
 
 
 def is_operator_agent(agent_name: str) -> bool:
-    """True for human-operator, grader-bot, graderbot, etc."""
+    """True for human-operator, grader-bot, graderbot, exam-judge, etc.
+
+    Exact-alias match first (fast path); falls back to substring search
+    on the normalized name so unknown live-hub variants (Grader-Tom,
+    course-operator, exam-judge) still trigger the operator fast-path.
+    """
     key = agent_name.lower().replace("-", "").replace("_", "")
-    return key in _OPERATOR_ALIASES
+    if key in _OPERATOR_ALIASES:
+        return True
+    return any(s in key for s in _OPERATOR_SUBSTRINGS)
 
 
 def latest_operator_command(messages: list[dict]) -> str | None:

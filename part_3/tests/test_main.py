@@ -187,6 +187,20 @@ class TestOperatorDetection:
         assert main.is_operator_agent("human-operator") is True
         assert main.is_operator_agent("macmini1") is False
 
+    def test_is_operator_agent_substring_fallback_matches_variants(self):
+        # Unknown live-hub variants should still be recognized via substring search
+        assert main.is_operator_agent("Grader-Tom") is True
+        assert main.is_operator_agent("exam-judge") is True
+        assert main.is_operator_agent("course-operator") is True
+        assert main.is_operator_agent("the-examiner") is True
+        assert main.is_operator_agent("human-tester") is True
+
+    def test_is_operator_agent_substring_fallback_rejects_normal_agents(self):
+        assert main.is_operator_agent("macmini1") is False
+        assert main.is_operator_agent("stefan-coder") is False
+        assert main.is_operator_agent("summarizer") is False
+        assert main.is_operator_agent("sina-factchecker") is False
+
     def test_has_imperative_no_substring_false_positive(self):
         assert main.has_imperative("we are creative thinkers") is False
         assert main.has_imperative("please create the file") is True
@@ -354,6 +368,25 @@ class TestHubSend:
 # ---------------------------------------------------------------------------
 # Hub retry logic
 # ---------------------------------------------------------------------------
+class TestCallLLMExceptionHandling:
+    def test_connection_error_returns_none(self):
+        # Any non-APIError exception (network/TLS/JSON decode) must not propagate
+        with patch("agent.OpenAI") as mock_openai_class:
+            mock_client = MagicMock()
+            mock_client.chat.completions.create.side_effect = ConnectionError("dns fail")
+            mock_openai_class.return_value = mock_client
+            result = agent._call_llm([{"role": "user", "content": "hi"}], "sys")
+            assert result is None
+
+    def test_value_error_returns_none(self):
+        with patch("agent.OpenAI") as mock_openai_class:
+            mock_client = MagicMock()
+            mock_client.chat.completions.create.side_effect = ValueError("bad JSON")
+            mock_openai_class.return_value = mock_client
+            result = agent._call_llm([{"role": "user", "content": "hi"}], "sys")
+            assert result is None
+
+
 class TestHubRetry:
     def test_retryable_5xx(self):
         assert hub._retryable(500, None) is True

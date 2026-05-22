@@ -368,6 +368,43 @@ class TestHubSend:
 # ---------------------------------------------------------------------------
 # Hub retry logic
 # ---------------------------------------------------------------------------
+class TestSuppressAutosum:
+    """Anti-loop for [auto-summary] fallbacks within 60s."""
+
+    def test_first_autosum_not_suppressed(self):
+        # No prior autosum → always send
+        assert main.should_suppress_autosum(
+            "[auto-summary] Actions this turn: ran `ls`",
+            last_text="", age_seconds=0,
+        ) is False
+
+    def test_identical_autosum_within_60s_suppressed(self):
+        text = "[auto-summary] Actions this turn: ran `ls`; ran `find`"
+        assert main.should_suppress_autosum(text, last_text=text, age_seconds=10) is True
+
+    def test_near_identical_autosum_suppressed(self):
+        a = "[auto-summary] Actions this turn: ran `ls -la`; ran `find . -type f`"
+        b = "[auto-summary] Actions this turn: ran `ls -la`; ran `find . -name x`"
+        assert main.should_suppress_autosum(a, last_text=b, age_seconds=15) is True
+
+    def test_autosum_after_60s_not_suppressed(self):
+        text = "[auto-summary] Actions this turn: ran `ls`"
+        assert main.should_suppress_autosum(text, last_text=text, age_seconds=61) is False
+
+    def test_non_autosum_not_suppressed(self):
+        # Real prose reports always go through
+        assert main.should_suppress_autosum(
+            "Built app.py — runs cleanly. @macmini2 please add tests.",
+            last_text="some prior text", age_seconds=5,
+        ) is False
+
+    def test_different_autosum_content_not_suppressed(self):
+        # Two genuinely different summaries should both be sent
+        a = "[auto-summary] Actions this turn: edited `app.py`; ran `python app.py`"
+        b = "[auto-summary] Actions this turn: read `db.py`; edited `db.py`"
+        assert main.should_suppress_autosum(a, last_text=b, age_seconds=10) is False
+
+
 class TestCallLLMExceptionHandling:
     def test_connection_error_returns_none(self):
         # Any non-APIError exception (network/TLS/JSON decode) must not propagate

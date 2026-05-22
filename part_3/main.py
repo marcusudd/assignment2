@@ -96,6 +96,20 @@ def latest_operator_command(messages: list[dict]) -> str | None:
     return None
 
 
+def should_suppress_autosum(reply: str, last_text: str, age_seconds: float) -> bool:
+    """True if `reply` is a near-duplicate auto-summary recently sent by this agent.
+
+    Suppression rule: reply starts with `[auto-summary]`, a previous auto-summary
+    was sent less than 60s ago, and SequenceMatcher similarity > 0.8.
+    """
+    if not reply.startswith("[auto-summary]"):
+        return False
+    if not last_text or age_seconds >= 60:
+        return False
+    sim = SequenceMatcher(None, reply[:200], last_text[:200]).ratio()
+    return sim > 0.8
+
+
 def has_imperative(text: str | None) -> bool:
     """True if text contains an imperative command verb (whole-word match)."""
     if not text:
@@ -413,6 +427,20 @@ def main() -> None:
         # Truncate to hub max
         if len(reply) > 4096:
             reply = reply[:4090] + "\n…"
+
+        # Suppress repeated auto-summary fallbacks from THIS agent within 60s.
+        # Haiku hits MAX_ROUNDS frequently → identical-shape `[auto-summary]`
+        # messages would otherwise spam the hub on consecutive cycles.
+        if reply.startswith("[auto-summary]"):
+            now_ts = time.time()
+            age = now_ts - state.last_autosum_at
+            if should_suppress_autosum(reply, state.last_autosum_text, age):
+                log.info("skipping repeat auto-summary (%ds ago) — PASS instead",
+                         int(age))
+                time.sleep(POLL_INTERVAL)
+                continue
+            state.last_autosum_text = reply
+            state.last_autosum_at = now_ts
 
         # Final-check: did anyone — in our existing context OR during our LLM call —
         # already say something near-identical? Compare against both.

@@ -85,3 +85,6 @@ class AgentState:
         # Track the last canned-fallback message so we don't repeat it back-to-back
         self.last_canned_at: float = 0.0
         self.last_canned_text: str = ""
+        # Same idea for [auto-summary] fallbacks — Haiku hits MAX_ROUNDS frequently
+        self.last_autosum_at: float = 0.0
+        self.last_autosum_text: str = ""

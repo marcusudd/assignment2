@@ -34,7 +34,7 @@ class BashApproval:
 
 bash_approval = BashApproval()
 
-MODEL = os.getenv("MODEL", "anthropic/claude-haiku-4.5")
+MODEL = os.getenv("MODEL", "google/gemini-2.5-flash")
 WORKSPACE_DIR = os.getenv("WORKSPACE_DIR", "./workspace")
 MAX_OUTPUT = int(os.getenv("MAX_OUTPUT", "5000"))
 MAX_ROUNDS = int(os.getenv("MAX_ROUNDS", "10"))

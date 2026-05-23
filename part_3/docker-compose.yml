@@ -32,7 +32,7 @@ services:
       MAX_ROUNDS: "10"
       RESPONSE_DELAY: "2"
       POLL_INTERVAL: "5"
-      MODEL: "anthropic/claude-haiku-4.5"
+      MODEL: "google/gemini-2.5-flash"
     env_file:
       - .env
     volumes:
@@ -58,7 +58,7 @@ services:
       MAX_ROUNDS: "10"
       RESPONSE_DELAY: "30"
       POLL_INTERVAL: "5"
-      MODEL: "anthropic/claude-haiku-4.5"
+      MODEL: "google/gemini-2.5-flash"
     env_file:
       - .env
     volumes:
@@ -84,7 +84,7 @@ services:
       MAX_ROUNDS: "10"
       RESPONSE_DELAY: "60"
       POLL_INTERVAL: "5"
-      MODEL: "anthropic/claude-haiku-4.5"
+      MODEL: "google/gemini-2.5-flash"
     env_file:
       - .env
     volumes:

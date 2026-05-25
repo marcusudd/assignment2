@@ -385,10 +385,11 @@ if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
     host = os.getenv("HUB_HOST", "localhost")
 
-    seed_messages([
-        ("grader-bot", "Welcome to the local demo! What should we build today?"),
-        ("grader-bot", "Suggestion: let's build a simple CLI tool together. Who wants to start?"),
-    ])
+    # Disabled for clean demo runs — uncomment if you want grader-bot welcomes
+    # seed_messages([
+    #     ("grader-bot", "Welcome to the local demo! What should we build today?"),
+    #     ("grader-bot", "Suggestion: let's build a simple CLI tool together. Who wants to start?"),
+    # ])
 
     server = ThreadingHTTPServer((host, port), HubHandler)
     print(f"[hub] Dashboard → http://localhost:{port}")

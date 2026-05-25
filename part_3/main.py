@@ -39,6 +39,22 @@ _OPERATOR_ALIASES = frozenset({
     "humanoperator", "operator", "human", "graderbot", "grader",
 })
 _OPERATOR_SUBSTRINGS = ("grader", "operator", "judge", "examiner", "human")
+
+# "I will..." promise detection — gemini-2.5-flash on complex tasks falls into
+# planning-mode and sends prose intent without using tools. We catch those.
+_PROMISE_RE = re.compile(
+    r"\bi'?ll\b"  # I'll / Ill
+    r"|\bi\s+will\b"
+    r"|\bi\s+plan\s+to\b"
+    r"|\bnext,?\s+i'?ll\b"
+    r"|\bi'?m\s+(going\s+to|about\s+to)\b",
+    re.IGNORECASE,
+)
+_DELIVERY_RE = re.compile(
+    r"\b(created|wrote|added|edited|updated|removed|fixed|implemented|"
+    r"installed|deleted|verified|ran|tested|built)\b",
+    re.IGNORECASE,
+)
 _IMPERATIVE_RE = re.compile(
     r"\b(" + "|".join(re.escape(w) for w in _IMPERATIVES) + r")\b",
     re.IGNORECASE,
@@ -115,6 +131,23 @@ def has_imperative(text: str | None) -> bool:
     if not text:
         return False
     return _IMPERATIVE_RE.search(text) is not None
+
+
+def is_empty_promise(reply: str) -> bool:
+    """True if reply contains future-tense intent without any past-tense delivery.
+
+    Catches "I will start by..." / "I'll begin..." patterns from models (especially
+    gemini-2.5-flash) that switch to planning-mode on complex tasks instead of
+    actually using tools. If the reply ALSO contains a delivery verb
+    ("Created X" / "Ran Y"), it's accepted as a delivery + follow-up plan.
+    """
+    if not reply or reply == "PASS":
+        return False
+    if not _PROMISE_RE.search(reply):
+        return False
+    if _DELIVERY_RE.search(reply):
+        return False
+    return True
 
 
 def operator_directive_pending(messages: list[dict]) -> bool:
@@ -387,6 +420,19 @@ def main() -> None:
                     state.last_canned_text = canned
                     state.last_canned_at = now_ts
                     log.info("fallback reply used (still PASS after retry)")
+
+        # Empty-promise detection: agent said "I will..." without using tools.
+        # Force retry with strong "use tools NOW" prompt.
+        if not soft_limit and reply != "PASS" and is_empty_promise(reply):
+            log.info("empty promise detected ('I will...' without delivery) — retrying")
+            promise_nudge = active_prompt + (
+                "\n\nYour previous reply was a PROMISE ('I will...'). "
+                "That is FORBIDDEN. Use bash/edit_file NOW to create or modify ONE file, "
+                "then report what you ACTUALLY did with quoted output. "
+                "If you cannot deliver one concrete file this turn, reply PASS instead."
+            )
+            reply = ag.decide(external, AGENT_NAME, promise_nudge, history, token_counter)
+            log.info("← promise-retry reply: %s", reply[:120] if reply != "PASS" else "PASS")
 
         # For unaddressed tasks: nudge once to prevent total silence.
         # Skip nudge for short social messages (greetings etc.) — not SWE tasks.

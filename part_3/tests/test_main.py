@@ -368,6 +368,40 @@ class TestHubSend:
 # ---------------------------------------------------------------------------
 # Hub retry logic
 # ---------------------------------------------------------------------------
+class TestEmptyPromise:
+    """is_empty_promise — catches 'I will...' without actual delivery."""
+
+    def test_pure_promise_caught(self):
+        assert main.is_empty_promise("I will start by building the backend") is True
+        assert main.is_empty_promise("I'll begin with FastAPI") is True
+        assert main.is_empty_promise("I plan to add tests next") is True
+        assert main.is_empty_promise("Next, I'll set up the database") is True
+        assert main.is_empty_promise("I'm going to handle the frontend") is True
+
+    def test_delivery_with_followup_plan_not_caught(self):
+        # Past-tense delivery + future plan = OK (agent delivered + announced next)
+        assert main.is_empty_promise(
+            "Created app.py with /healthz. I'll add models.py next."
+        ) is False
+        assert main.is_empty_promise(
+            "Ran the tests successfully. I plan to refactor tomorrow."
+        ) is False
+
+    def test_pure_delivery_not_caught(self):
+        assert main.is_empty_promise("Created app.py — runs cleanly.") is False
+        assert main.is_empty_promise("Edited db.py to add new schema.") is False
+        assert main.is_empty_promise("Verified the API responds with 200.") is False
+
+    def test_pass_not_caught(self):
+        assert main.is_empty_promise("PASS") is False
+
+    def test_empty_string_not_caught(self):
+        assert main.is_empty_promise("") is False
+
+    def test_no_future_tense_not_caught(self):
+        assert main.is_empty_promise("The workspace is empty.") is False
+
+
 class TestSuppressAutosum:
     """Anti-loop for [auto-summary] fallbacks within 60s."""
 

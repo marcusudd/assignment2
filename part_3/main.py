@@ -579,6 +579,11 @@ def main() -> None:
         if delegated and operator_directive:
             log.info("delegation override — tools required this turn")
 
+        # Tell the security guard which files are off-limits for rm/find -delete
+        # this turn. Cleared when no operator imperative is active so we don't
+        # block routine cleanup of unrelated files.
+        ag.set_protected_files(extract_required_filenames(op_cmd) if op_cmd else [])
+
         log.info("→ calling LLM (history=%d entries)", len(history))
         reply = ag.decide(external, AGENT_NAME, active_prompt, history, token_counter)
         if reply.startswith("[auto-summary]"):

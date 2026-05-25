@@ -1,6 +1,7 @@
-# Part 3 — Agent handoff (2026-05-22)
+# Part 3 — Session handoff (2026-05-25)
 
-Handoff for the next agent continuing Assignment 2 Del 3 work.
+Handoff covering **Claude Code session** (review, shootout, demos) + **Cursor session** (orchestration, smoke tests, go-on fix).  
+Branch: `main`, **15 commits ahead of `origin/main`** (through `312e5be`).
 
 ---
 
@@ -9,71 +10,33 @@ Handoff for the next agent continuing Assignment 2 Del 3 work.
 From [../CLAUDE.md](../CLAUDE.md) and [../th25-hub-connection.md](../th25-hub-connection.md):
 
 - **100% own Python** — no LangGraph/LangChain/Cursor-as-agent
-- **Hub:** HTTPS REST, 10 msgs/agent, 4096 chars/msg, 1 req/sec
-- **System prompt from file** — no secrets, safe collaboration, PASS for infinite-loop control
-- **Rate-limit + token cap** — console-adjustable (`pause`, `cap`, `limit`)
+- **Hub:** REST, 10 msgs/agent, 4096 chars/msg, 1 req/sec (live)
+- **System prompt from file** — SWE-only, no secrets, PASS for loop control
+- **Rate-limit + token cap** — console: `pause`, `cap`, `limit`
 - **Smart participation** — mentions, anti-dup, stagger delays, operator priority
-- **Exam:** 2026-05-29, one agent in live hub with ~20 student agents
+- **Exam 2026-05-29:** **one** agent on live hub (~20 peer agents)
 
-**Do not change without good reason:** `hub.py` protocol, security `BLOCKED` list in `agent.py`, docker service layout.
-
----
-
-## What this agent session completed
-
-### Committed (on `main`)
-
-| Commit | Summary |
-|--------|---------|
-| `ea51b06` | Baseline hardening: anti-dup, auto-fallback, Haiku, crash loop, fast-forward |
-| `22a4e52` | Canned "On it!" anti-repeat (60s window) |
-| `9948197` | Prompt: no Step N leak, TASK COMPLETED rule |
-| `8ebbddf` | Hub retry on 5xx/timeout (+ tests) |
-| `c4c1915` | Defaults aligned (Haiku, macmini1, MAX_ROUNDS=10) |
-| `3aa74ff` | Iteration log doc update |
-
-### Uncommitted (implement plan "Del 3 hub-fixar" — ready to commit)
-
-| File | Changes |
-|------|---------|
-| `main.py` | `operator_directive_pending`, `task_completed_heuristic`, operator fast-path (skip delay), operator prompt injection on first `decide()`, gated canned ack, history trim at soft limit |
-| `config/system_prompt.txt` | Delete-first for operator, @mention after complete → PASS, 400-char messages |
-| `tests/test_main.py` | +5 tests → **156 passed** |
-| `COMMANDS.txt` | Workspace cleanup note + Flask/delete test curl |
-
-**Run tests:** `cd part_3 && .venv/bin/pytest tests/ -q` → **160 passed** (after 2026-05-22 review fixes)
-
-**Security/quality audit:** [REVIEW.md](REVIEW.md)
-
-**Suggested commit message:**
-
-```
-Add operator fast-path and task-completed gates for hub agents
-
-- Skip RESPONSE_DELAY when operator/grader posts an imperative directive
-- Inject operator command block on first LLM call, not only on nudge retry
-- Suppress canned "On it!" when task_completed_heuristic is true
-- Prompt: delete workspace files before rebuild; shorter hub messages
-- Trim history to 12 entries at 75% token soft limit
-```
+**Do not change lightly:** `hub.py` protocol, `agent.py` `BLOCKED` list, docker service layout.
 
 ---
 
-## Current production config
+## Current production config (use this on exam)
 
 | Setting | Value | Where |
 |---------|-------|-------|
-| MODEL | `anthropic/claude-haiku-4.5` | `docker-compose.yml`, `.env.example` |
-| MAX_ROUNDS | `10` | env / compose |
-| max_tokens (per LLM call) | `2048` | `agent.py` line ~246 (hardcoded) |
+| **MODEL** | `google/gemini-2.5-flash` | `docker-compose.yml`, `.env.example`, `agent.py` default |
+| MAX_ROUNDS | `10` | compose / env |
+| MAX_TOKENS | `2048` | `agent.py` (env `MAX_TOKENS`) |
 | TOKEN_CAP | `150000` | compose |
 | MSG_CAP | `10` | compose |
-| RESPONSE_DELAY | 2s / 30s / 60s | macmini1/2/3 |
-| DRY_RUN | `false` | required for hub chat |
+| RESPONSE_DELAY | 2s / 30s / 60s | macmini1 / macmini2 / macmini3 |
+| Mock hub | **No grader-bot seed** | `frontend_demo/mock_hub.py` (commented out) |
 
-**Why Haiku + 2048 + 10 rounds:** gpt-4o-mini worked but duplicated edits; Haiku needs more tokens before tool calls and more rounds. Empirically best local run used this stack.
+**Cost:** ~$0.15/session, ~$1.65 for 10 local tests + exam.
 
-**Nödfallback:** `MODEL=openai/gpt-4o-mini`, `MAX_ROUNDS=6` in `.env` if Haiku misbehaves on exam day.
+**Fallback if Gemini misbehaves:** `openai/gpt-4.1-mini` (~$0.11/session) or `openai/gpt-4o-mini` (~$0.04, proven on simple tasks, edit_file dup risk).
+
+**Do not use for exam without retest:** `anthropic/claude-haiku-4.5` (misses filenames under noise; expensive).
 
 ---
 
@@ -82,99 +45,201 @@ Add operator fast-path and task-completed gates for hub agents
 ```bash
 cd assignment2/part_3
 
-# ALWAYS between tests:
-docker compose down
-find workspace -mindepth 1 ! -name '.gitkeep' -delete
-rm -f logs/macmini*.log
+# One-shot reset (preferred):
+./scripts/reset-local.sh
 
-docker compose up --build   # or -d for detached
+docker compose up --build    # or -d
 # Hub UI: http://localhost:8080
-# Logs: tail -f logs/macmini1.log
+# Logs:   tail -f logs/macmini1.log
 ```
 
-Full commands: [COMMANDS.txt](COMMANDS.txt)
+Post task (curl or UI), password `th25-agents-vg`.  
+Full ops: [COMMANDS.txt](COMMANDS.txt)
 
 ### Live exam (2026-05-29)
 
-1. In `.env`: use **LIVE** block — `AGENT_NAME=marcus-macmini1` (or your name), `HUB_URL=https://wb48jtfnjng6on-8080.proxy.runpod.net`
+1. `.env` — **LIVE** block: `AGENT_NAME=marcus-macmini1`, RunPod `HUB_URL`
 2. `DRY_RUN=false`
-3. Run **one** agent: `python main.py` (not 3 macminis against live hub)
-4. Console in second terminal for `cap` / `limit` / `pause`
+3. **One** agent: `python main.py` (not 3× macmini on live hub)
+4. Second terminal: console `status` / `cap` / `limit` / `pause`
+
+### Large projects — recommended operator pattern
+
+Do **not** expect 6+ files in one message in 3 minutes with 3 agents. Use **phased hub messages**:
+
+1. “Delete workspace files. Create `requirements.txt`, `models.py`, `db.py`. Verify import.”
+2. “Create `app.py` with routes … Test with TestClient.”
+3. “Create `project_cli.py` + `README.md`.”
+
+After each phase: `./scripts/reset-local.sh` only between **full** demo restarts, not mid-task.
 
 ---
 
-## Architecture (quick map)
+## Architecture
 
 ```
-main.py          — poll loop, routing, anti-dup, operator fast-path, nudges
-agent.py         — decide() multi-round tools, security guard, auto-fallback
-hub.py           — REST client, rate limit, retry
-console.py       — stdin thread: pause/cap/limit/quit
+main.py              — poll loop, routing, operator/gap/delegation/promise gates
+agent.py             — decide(), tools, security guard, auto-fallback, TokenCounter
+hub.py               — fetch/send + retry on 5xx/timeout
+console.py           — pause/cap/limit/quit (stdin thread)
 config/system_prompt.txt
-workspace/       — shared bind mount (all containers)
-frontend_demo/   — local mock hub (port 8080)
-tests/test_main.py — 156 unit tests
+workspace/           — shared bind mount (3 containers)
+frontend_demo/mock_hub.py — local hub, empty start (no welcome seed)
+scripts/reset-local.sh
+tests/test_main.py   — 187 unit tests
 ```
 
-### Key behaviors in `main.py`
+---
 
-- **PASS** — agent sends nothing
-- **mentioned_other** — skip if message starts with `@other`
-- **operator_directive** — skip RESPONSE_DELAY, immediate recheck, inject `*** OPERATOR'S DIRECT COMMAND ***`
-- **looks_duplicate** — abort send (file+action or text similarity >0.75)
-- **auto-fallback** in `agent.py` when tools used but LLM returns PASS/empty/max rounds
-- **Token tiers:** 75% soft (no nudge/retry), 90% hard (sign-off + silent)
+## Session timeline (what happened)
+
+### Phase A — Claude Code: review + hardening (`ea51b06` … `6be0644`)
+
+- Checkpointed uncommitted work; fixed Step-N leak, “On it!” loop, hub retry, operator fast-path, `REVIEW.md`, `HANDOFF.md` (old).
+- Pre-exam fixes: broader `is_operator_agent()`, auto-summary anti-loop, `reset-local.sh`.
+- **Solid test:** `csv2json.py` / `urls.py` — all agents prose, operator fast-path OK.
+
+### Phase B — Model shootout (`fc89b66`)
+
+Compared on **wordfreq.py** task (explicit filename):
+
+| Model | wordfreq.py | Notes |
+|-------|-------------|-------|
+| gpt-4.1-mini | ✅ | Extra distractor files |
+| **gemini-2.5-flash** | ✅ | **Winner** — focused, all prose, no auto-summary spam |
+| deepseek-chat | ✅ | Extra files |
+
+**Chosen:** `google/gemini-2.5-flash` for test + exam consistency.
+
+### Phase C — Demo + large-task failures
+
+- Clean hub (no grader-bot welcomes).
+- **Simple tasks** (urls, wordfreq): ✅ ~30–60s, all agents deliver.
+- **Complex task** (Project Tracker, 6 files): ❌ ~1 file + “I will…” promises; agents idle after partial work.
+
+### Phase D — Large-project orchestration (`d6d9800`, `ff9a5fe`)
+
+- **NO PROMISES** prompt + `is_empty_promise()` / `has_disallowed_promise()`.
+- **WORKSPACE GAP** injection (missing filenames from operator text).
+- **Delegation override** — `@agent please take…` → tools required.
+- Optional `PROJECT_STATUS.md` in prompt.
+- Result: 3/6 files (requirements, db, README); mixed “Created X. Next I will…” still sent (loophole).
+
+### Phase E — Cursor: go-on + complaint fix (`312e5be`)
+
+**Bug:** `latest_operator_command()` returned `"go on"` → lost imperative spec → no GAP/delegation.
+
+**Fix:**
+
+- `latest_operator_command()` → latest operator message **with imperative** (`build`/`create`/…).
+- `is_non_delivery_reply()` + `hub_reply_blocked()` — block complaint prose without delivery.
+- `apply_send_quality_retries()` — promise + non-delivery retries before send.
+
+**Smoke test (2026-05-25 11:44):** Project Tracker + `go on` → **5/6 files** in ~6 min:
+
+- ✅ requirements, models, db, project_cli, README  
+- ❌ `app.py` — macmini2 ran `rm -f app.py` in tool chain (regression)
 
 ---
 
-## Known issues / not fixed
+## Key behaviors in `main.py` (current)
 
-1. **macmini3 (60s delay)** still waits one full delay cycle if operator posts during that window; recheck then includes operator — no more "no directive" PASS, but slower than macmini1 fast-path.
-2. **Auto-summary spam** — Haiku often hits MAX_ROUNDS; fallback sends `[auto-summary]` instead of prose.
-3. **Flask in workspace** — not in stdlib; containers may lack `flask` unless installed via bash (agents sometimes assume it exists).
-4. **3-agent local test** burns token budget fast — not representative of single-agent exam.
-5. **Workspace races** — 3 containers share bind mount; simultaneous `cat > file` can clash (rare).
-
----
-
-## Last live test results (after hub-fixar)
-
-Task: *Build Flask app, delete old files first* (seeded `leftover.json`)
-
-- ✅ `leftover.json` removed
-- ✅ `app.py` + `templates/index.html` created
-- ✅ `operator directive — skipping response delay` in macmini1.log
-- ✅ No "On it!" in logs
-- ✅ macmini3 did not send "no directive" after operator (saw operator on recheck)
-
-Docker may still be running from last test — run `docker compose down` if needed.
+| Mechanism | Purpose |
+|-----------|---------|
+| `latest_operator_command()` | Active **imperative** spec (ignores “go on”) |
+| `operator_directive_pending()` | Fast-path skip delay |
+| `build_workspace_gap_section()` | Lists missing required files (2+ in spec) |
+| `was_delegated_to_me()` + DELEGATION OVERRIDE | @mention + please/take → must use tools |
+| `has_disallowed_promise()` / `is_non_delivery_reply()` | Block promises + complaints |
+| `apply_send_quality_retries()` | Up to 2 retries before send |
+| `hub_reply_blocked()` | ABORT send if still bad |
+| `looks_duplicate()` | ABORT if dup file+action or text >0.75 similarity |
+| `should_suppress_autosum()` | No repeat `[auto-summary]` within 60s |
+| Canned “On it!” | Only @mention + PASS; 60s anti-repeat; tool nudge if delegated + operator open |
+| `task_completed_heuristic()` | Suppress canned ack when peers reported success |
+| Token tiers | 75% soft (trim history, no nudge), 90% hard sign-off |
 
 ---
 
-## Documentation files
+## Empirical results summary
+
+| Task type | Outcome | Notes |
+|-----------|---------|-------|
+| 1-file CLI (wordfreq, urls) | **Good** | 30–60s, prose reports |
+| Medium (TODO API iter 1) | **Partial** | app.py + deps; promise leak before fix |
+| Large 6-file (Tracker, pre-orchestration) | **Poor** | 1 file, promises |
+| Large 6-file (after `d6d9800`) | **Partial** | 3 files; go-on lost context |
+| Large 6-file (after `312e5be`) | **Good** | 5/6 files; app.py deleted by agent |
+
+---
+
+## Known issues (open)
+
+1. **Agents `rm` required files** — e.g. `rm -f app.py` while building app. **Suggested fix:** extend `agent.py` security guard or prompt: forbid `rm` on filenames from active operator spec.
+2. **Mixed delivery + promise** — largely fixed by `has_disallowed_promise`; still watch auto-summary text.
+3. **Anti-dup ABORT hides progress** — agent creates file but message blocked; peers may redo work.
+4. **3-agent token burn** — macmini3 hit 90% cap in Tracker test; use 1 agent for long local runs.
+5. **Workspace races** — 3 containers, one bind mount (rare file clash).
+6. **`go on` has no fast-path** — correct; relies on retained imperative spec in prompt injection (works after `312e5be`).
+
+---
+
+## Git commit map (Part 3, newest first)
+
+| Commit | Summary |
+|--------|---------|
+| `312e5be` | Fix “go on” clearing operator context; block non-delivery replies |
+| `d6d9800` | Large-project orchestration (GAP, delegation, promise gate) |
+| `0b2b8f0` | Checkpoint before orchestration |
+| `ff9a5fe` | NO PROMISES prompt + `is_empty_promise`; disable hub seed |
+| `fc89b66` | Switch to gemini-2.5-flash (shootout winner) |
+| `6be0644` | `reset-local.sh` |
+| `4ea6efe` | Auto-summary anti-loop |
+| `bdbd3a4` | Operator substring fallback + LLM exception handling |
+| `0bcfd38` | Operator fast-path, task-completed, REVIEW/HANDOFF |
+| … | See `git log --oneline part_3/` back to `d0f59c3` |
+
+**Tests:** `cd part_3 && .venv/bin/pytest tests/ -q` → **187 passed**
+
+**Working tree:** clean at handoff time.
+
+---
+
+## Suggested next steps
+
+1. **Prompt/guard:** forbid `rm` on files listed in active operator directive.
+2. **Optional:** skip dup-ABORT when reply mentions a file still missing from `build_workspace_gap_section`.
+3. **Pre-exam:** single-agent LIVE dry run with `limit 3`; phased operator messages if task is large.
+4. **Do not** switch model without a 1-task shootout on **your** exam-style prompt.
+5. Push `main` when ready (`git push` — 15 commits ahead of origin).
+
+---
+
+## Rules for next agent
+
+- Type hints; match existing style; no new deps without asking
+- **Do not commit** unless user asks
+- `git switch` / `git restore` (not checkout)
+- User language: Swedish OK; docs English or Swedish
+- This handoff supersedes the 2026-05-22 sections above (kept for history in git)
+
+---
+
+## Quick reference — log grep
+
+```bash
+grep -h "SENT\|ABORT\|blocked\|operator directive\|delegation\|promise\|non-delivery" logs/macmini*.log
+find workspace -type f ! -name .gitkeep ! -path '*/__pycache__/*'
+curl -s "http://localhost:8080/api/stats?password=th25-agents-vg" | python3 -m json.tool
+```
+
+---
+
+## Documentation
 
 | File | Purpose |
 |------|---------|
-| [PART_3_ITERATION_LOG.md](PART_3_ITERATION_LOG.md) | Empirical iteration history (gpt-4o-mini vs Haiku vs Sonnet) |
+| [PART_3_ITERATION_LOG.md](PART_3_ITERATION_LOG.md) | Model shootout + iteration history |
+| [REVIEW.md](REVIEW.md) | Security/quality audit (2026-05-22) |
 | [COMMANDS.txt](COMMANDS.txt) | Ops cheat sheet |
 | [../th25-hub-connection.md](../th25-hub-connection.md) | Live hub API |
-
----
-
-## Suggested next steps for incoming agent
-
-1. **Commit** uncommitted changes (4 files) if user wants them saved.
-2. Optional: make `max_tokens` env-configurable (`MAX_TOKENS` in `.env.example`).
-3. Optional: after delay+recheck, if `operator_directive_pending` becomes true, log `operator directive (late)` — same as fast-path for macmini3.
-4. Pre-exam: single-agent dry run against LIVE hub with low `limit 3` first to verify connectivity.
-5. Do **not** refactor `hub.py` or weaken security guard unless assignment requirements change.
-
----
-
-## Rules reminder for the new agent
-
-- Match existing code style; type hints; async not required in part_3
-- **Ask before adding dependencies**
-- **Do not commit** unless user asks
-- Use `git switch` / `git restore`, not `checkout`
-- User communicates in Swedish; technical docs can be English or Swedish

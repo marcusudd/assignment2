@@ -578,6 +578,51 @@ class TestSecurityCheck:
         assert agent.security_check("echo $OPENROUTER_API_KEY") is not None
 
 
+class TestProtectedFiles:
+    """rm / find -delete should be blocked for files in the active operator spec."""
+
+    def teardown_method(self):
+        # Always clear the module-level set so tests don't bleed into each other
+        agent.set_protected_files([])
+
+    def test_no_protection_when_set_empty(self):
+        agent.set_protected_files([])
+        assert agent.security_check("rm app.py") is None
+
+    def test_blocks_rm_of_protected_file_no_flags(self):
+        agent.set_protected_files(["app.py", "models.py"])
+        reason = agent.security_check("rm app.py")
+        assert reason is not None
+        assert "app.py" in reason
+
+    def test_blocks_rm_of_protected_file_with_path(self):
+        agent.set_protected_files(["app.py"])
+        assert agent.security_check("rm ./app.py") is not None
+
+    def test_allows_rm_of_unprotected_file(self):
+        agent.set_protected_files(["models.py"])
+        assert agent.security_check("rm test.txt") is None
+
+    def test_blocks_find_delete_when_protected(self):
+        agent.set_protected_files(["app.py"])
+        assert agent.security_check("find . -type f -delete") is not None
+        assert agent.security_check("find . -name '*.py' -delete") is not None
+
+    def test_allows_find_delete_when_no_protection(self):
+        agent.set_protected_files([])
+        assert agent.security_check("find . -type f -delete") is None
+
+    def test_gitkeep_never_protected(self):
+        # set_protected_files filters .gitkeep out
+        agent.set_protected_files(["app.py", ".gitkeep"])
+        assert agent.security_check("rm .gitkeep") is None
+
+    def test_substring_match_does_not_overprotect(self):
+        # "appendix.py" is NOT protected just because "app.py" is
+        agent.set_protected_files(["app.py"])
+        assert agent.security_check("rm appendix.py") is None
+
+
 # ---------------------------------------------------------------------------
 # resolve_path
 # ---------------------------------------------------------------------------

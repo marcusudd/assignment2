@@ -122,6 +122,18 @@ _ALLOWED_ABS_PREFIXES: tuple[str, ...] = (
     "/usr/", "/bin/", "/sbin/", "/lib/", "/opt/", "/tmp/", "/dev/null",
 )
 
+# Files that the active operator directive requires — main.py updates this
+# before each decide() call so the security guard can block destructive
+# operations against them (rm / find -delete) even when an agent's prior
+# tool chain "looks reasonable".
+_PROTECTED_FILES: set[str] = set()
+
+
+def set_protected_files(names) -> None:
+    """Replace the set of files protected from rm / find -delete in this process."""
+    global _PROTECTED_FILES
+    _PROTECTED_FILES = {n for n in names if n and n != ".gitkeep"}
+
 
 def _has_external_path(command: str) -> bool:
     workspace = str(Path(WORKSPACE_DIR).resolve())
@@ -139,6 +151,16 @@ def security_check(command: str) -> str | None:
     for pattern, reason in _BLOCKED:
         if re.search(pattern, command, re.IGNORECASE):
             return reason
+    # Protect operator-spec files from destructive ops even without -rf flags.
+    # Agents have been observed running `rm app.py` or `find . -delete` and
+    # wiping a peer's completed file from the same operator directive.
+    if _PROTECTED_FILES:
+        if re.search(r"\bfind\b.*-delete\b", command, re.IGNORECASE):
+            return "find -delete with active operator spec (may remove required files)"
+        if re.search(r"\brm\b", command, re.IGNORECASE):
+            for fname in _PROTECTED_FILES:
+                if re.search(rf"(?:^|[\s/]){re.escape(fname)}\b", command):
+                    return f"removing protected file '{fname}' (active operator spec)"
     if _has_external_path(command):
         return "absolute path outside workspace"
     return None

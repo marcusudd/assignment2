@@ -228,6 +228,28 @@ def list_workspace_filenames(workspace_dir: str) -> set[str]:
     }
 
 
+def reply_mentions_missing_required(
+    reply: str, op_cmd: str | None, workspace_dir: str,
+) -> bool:
+    """True if reply names a required file that is STILL missing on disk.
+
+    Used to bypass dup-ABORT when a peer's prior claim was a promise that
+    didn't deliver — silencing our reply would lose the only actual progress.
+    """
+    required = extract_required_filenames(op_cmd)
+    if not required:
+        return False
+    present = list_workspace_filenames(workspace_dir)
+    missing = {f for f in required if f not in present}
+    if not missing:
+        return False
+    for m in _NAMED_FILE_RE.finditer(reply):
+        name = (m.group(1) or m.group(2) or "").strip()
+        if name and name in missing:
+            return True
+    return False
+
+
 def build_workspace_gap_section(op_cmd: str | None, workspace_dir: str) -> str:
     """Inject missing/existing filenames for large multi-file operator tasks."""
     required = extract_required_filenames(op_cmd)
@@ -712,9 +734,15 @@ def main() -> None:
                 others_during = [m for m in last_check if m["agent_name"] != AGENT_NAME]
             others_total = external + others_during
             if others_total and looks_duplicate(reply, others_total):
-                log.info("ABORT send — duplicate of another agent's recent message")
-                time.sleep(POLL_INTERVAL)
-                continue
+                # Bypass: if our reply names a REQUIRED file that is STILL missing
+                # on disk, the prior "claim" was a promise (not delivery). Send so
+                # the actual delivery isn't silenced by a duplicate filter.
+                if reply_mentions_missing_required(reply, op_cmd, ag.WORKSPACE_DIR):
+                    log.info("dup detected but reply fills a missing required file — sending anyway")
+                else:
+                    log.info("ABORT send — duplicate of another agent's recent message")
+                    time.sleep(POLL_INTERVAL)
+                    continue
         except Exception:
             pass
 

@@ -578,6 +578,57 @@ class TestSecurityCheck:
         assert agent.security_check("echo $OPENROUTER_API_KEY") is not None
 
 
+class TestReplyMentionsMissingRequired:
+    """dup-ABORT bypass: send anyway if reply names a still-missing required file."""
+
+    def test_no_op_cmd_returns_false(self, tmp_path):
+        assert main.reply_mentions_missing_required(
+            "Created app.py", op_cmd=None, workspace_dir=str(tmp_path),
+        ) is False
+
+    def test_no_required_files_returns_false(self, tmp_path):
+        # operator command has no filenames → nothing to check
+        assert main.reply_mentions_missing_required(
+            "Created app.py", op_cmd="Build something nice",
+            workspace_dir=str(tmp_path),
+        ) is False
+
+    def test_all_required_present_returns_false(self, tmp_path):
+        (tmp_path / "app.py").write_text("x")
+        (tmp_path / "db.py").write_text("x")
+        assert main.reply_mentions_missing_required(
+            "Created app.py",
+            op_cmd="Build app.py and db.py",
+            workspace_dir=str(tmp_path),
+        ) is False
+
+    def test_reply_names_missing_required_returns_true(self, tmp_path):
+        # db.py exists, app.py is still missing, reply mentions app.py
+        (tmp_path / "db.py").write_text("x")
+        assert main.reply_mentions_missing_required(
+            "Created app.py with routes",
+            op_cmd="Build app.py and db.py",
+            workspace_dir=str(tmp_path),
+        ) is True
+
+    def test_reply_mentions_only_done_required_returns_false(self, tmp_path):
+        # db.py is the one missing, but reply mentions app.py which is present
+        (tmp_path / "app.py").write_text("x")
+        assert main.reply_mentions_missing_required(
+            "Verified app.py runs cleanly",
+            op_cmd="Build app.py and db.py",
+            workspace_dir=str(tmp_path),
+        ) is False
+
+    def test_reply_mentions_unrelated_file_returns_false(self, tmp_path):
+        # Reply mentions test.py which isn't in the operator spec at all
+        assert main.reply_mentions_missing_required(
+            "Created test.py",
+            op_cmd="Build app.py and db.py",
+            workspace_dir=str(tmp_path),
+        ) is False
+
+
 class TestProtectedFiles:
     """rm / find -delete should be blocked for files in the active operator spec."""
 

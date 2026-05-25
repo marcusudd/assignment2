@@ -56,12 +56,64 @@ docker compose up --build    # or -d
 Post task (curl or UI), password `th25-agents-vg`.  
 Full ops: [COMMANDS.txt](COMMANDS.txt)
 
-### Live exam (2026-05-29)
+### Live exam (2026-05-29) — full procedure
 
-1. `.env` — **LIVE** block: `AGENT_NAME=marcus-macmini1`, RunPod `HUB_URL`
-2. `DRY_RUN=false`
-3. **One** agent: `python main.py` (not 3× macmini on live hub)
-4. Second terminal: console `status` / `cap` / `limit` / `pause`
+**Pre-flight (any time before exam):**
+```bash
+# 1. Confirm hub URL responds (404 = instructor hasn't started yet — wait)
+curl -s "https://wb48jtfnjng6on-8080.proxy.runpod.net/api/stats?password=th25-agents-vg"
+# Expect: JSON with per_agent / max_per_agent / total_messages
+```
+
+**.env — switch to LIVE block:**
+```
+# LOCAL block (comment out):
+# AGENT_NAME=macmini1
+# HUB_URL=http://localhost:8080
+# RESPONSE_DELAY=1
+
+# LIVE block (uncomment):
+AGENT_NAME=marcus-macmini1
+HUB_URL=https://wb48jtfnjng6on-8080.proxy.runpod.net
+HUB_PASSWORD=th25-agents-vg
+DRY_RUN=false
+RESPONSE_DELAY=2
+```
+
+**Dry-run with safety caps (verify everything boots):**
+```bash
+cd part_3
+MSG_CAP=3 TOKEN_CAP=30000 timeout 60 .venv/bin/python main.py
+# Expect log lines: bootstrap fetch OK, no 404
+# If clean → Ctrl+C and proceed to real run
+```
+
+**Real run — single agent (NOT three macminis against live hub):**
+```bash
+.venv/bin/python main.py
+# Second terminal: console for status / cap / limit / pause / quit
+```
+
+**Console commands while running:**
+| Command | Effect |
+|---|---|
+| `status` | Show msgs sent / tokens used / paused state |
+| `cap 200000` | Raise token cap mid-run |
+| `limit 15` | Raise message cap mid-run (hub still enforces 10/agent) |
+| `pause` | Stop responding (keeps connection) |
+| `resume` | Resume after pause |
+| `quit` | Clean shutdown |
+
+**If something breaks mid-exam:**
+| Symptom | Action |
+|---|---|
+| Agent crashes immediately | `python main.py` again — main loop has try/except, restart is safe |
+| Hub returns 401 | Wrong HUB_PASSWORD in `.env` |
+| Hub returns 429 | Rate-limited or msg cap hit — `pause` then `status` |
+| Agent goes silent on simple task | Check logs for `disallowed promise` — model may be looping; raise `cap` if budget hit |
+| Need to roll back to known-good baseline | `git checkout fc89b66` (Switch to gemini commit), restart |
+
+**Hard rule:** Do NOT run `docker compose up` against the live hub. The compose file points 3 agents at the local mock hub. Live exam = ONE agent via `python main.py` only.
 
 ### Large projects — recommended operator pattern
 

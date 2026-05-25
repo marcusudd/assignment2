@@ -134,13 +134,7 @@ def has_imperative(text: str | None) -> bool:
 
 
 def is_empty_promise(reply: str) -> bool:
-    """True if reply contains future-tense intent without any past-tense delivery.
-
-    Catches "I will start by..." / "I'll begin..." patterns from models (especially
-    gemini-2.5-flash) that switch to planning-mode on complex tasks instead of
-    actually using tools. If the reply ALSO contains a delivery verb
-    ("Created X" / "Ran Y"), it's accepted as a delivery + follow-up plan.
-    """
+    """True if reply contains future-tense intent without any past-tense delivery."""
     if not reply or reply == "PASS":
         return False
     if not _PROMISE_RE.search(reply):
@@ -148,6 +142,164 @@ def is_empty_promise(reply: str) -> bool:
     if _DELIVERY_RE.search(reply):
         return False
     return True
+
+
+def has_disallowed_promise(reply: str) -> bool:
+    """True if the hub message must not be sent — pure or mixed future-tense promises.
+
+    Mixed pattern (the Project Tracker bug): "Created requirements.txt. Next, I will
+    create models.py" — is_empty_promise returns False because of "Created", but the
+    message still advertises work not done this turn.
+    """
+    if not reply or reply == "PASS" or reply.startswith("[auto-summary]"):
+        return False
+    if is_empty_promise(reply):
+        return True
+    if _DELIVERY_RE.search(reply) and _PROMISE_RE.search(reply):
+        return True
+    return False
+
+
+_NAMED_FILE_RE = re.compile(
+    r"`([\w./-]+\.(?:py|sh|md|txt|sql|json))`"
+    r"|\b([a-z][\w]*\.(?:py|sh|md|txt|sql))\b",
+    re.IGNORECASE,
+)
+_DELEGATION_HINT_RE = re.compile(
+    r"\b(please|take|your turn|next file|handle|over to you|go ahead)\b",
+    re.IGNORECASE,
+)
+
+
+def extract_required_filenames(operator_text: str | None) -> list[str]:
+    """Filenames mentioned in an operator directive (multi-file tasks)."""
+    if not operator_text:
+        return []
+    seen: set[str] = set()
+    out: list[str] = []
+    for m in _NAMED_FILE_RE.finditer(operator_text):
+        name = (m.group(1) or m.group(2) or "").strip()
+        if name and name not in seen and name != ".gitkeep":
+            seen.add(name)
+            out.append(name)
+    return out
+
+
+def list_workspace_filenames(workspace_dir: str) -> set[str]:
+    root = Path(workspace_dir)
+    if not root.exists():
+        return set()
+    return {
+        p.name for p in root.rglob("*")
+        if p.is_file() and p.name != ".gitkeep"
+    }
+
+
+def build_workspace_gap_section(op_cmd: str | None, workspace_dir: str) -> str:
+    """Inject missing/existing filenames for large multi-file operator tasks."""
+    required = extract_required_filenames(op_cmd)
+    if len(required) < 2:
+        return ""
+    present = list_workspace_filenames(workspace_dir)
+    missing = [f for f in required if f not in present]
+    present_named = [f for f in required if f in present]
+    if not missing and not present_named:
+        return ""
+    lines: list[str] = []
+    if missing:
+        lines.append(f"Missing on disk (pick ONE to create this turn): {', '.join(missing)}")
+    if present_named:
+        lines.append(f"Already on disk: {', '.join(present_named)}")
+    return "\n\n*** WORKSPACE GAP ***\n" + "\n".join(lines) + "\n"
+
+
+def read_project_status_section(workspace_dir: str) -> str:
+    """Optional PROJECT_STATUS.md maintained by agents between turns."""
+    path = Path(workspace_dir) / "PROJECT_STATUS.md"
+    if not path.is_file():
+        return ""
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")[:600]
+    except OSError:
+        return ""
+    return f"\n\n*** PROJECT STATUS (disk) ***\n{text}\n"
+
+
+def was_delegated_to_me(messages: list[dict]) -> bool:
+    """True if a peer @mentioned this agent and asked them to take work."""
+    for m in messages:
+        if m["agent_name"] == AGENT_NAME:
+            continue
+        content = m["content"]
+        if _MENTION_ME_RE.search(content) and _DELEGATION_HINT_RE.search(content):
+            return True
+    return False
+
+
+def build_active_prompt(
+    system_prompt: str,
+    external: list[dict],
+    *,
+    operator_directive: bool,
+    op_cmd: str | None,
+    mentioned_me: bool,
+) -> str:
+    active = system_prompt
+    if operator_directive and op_cmd:
+        active += build_operator_prompt_section(op_cmd)
+        active += build_workspace_gap_section(op_cmd, ag.WORKSPACE_DIR)
+        active += read_project_status_section(ag.WORKSPACE_DIR)
+    if mentioned_me:
+        if operator_directive or was_delegated_to_me(external):
+            active += (
+                f"\n\nDELEGATION OVERRIDE: @{AGENT_NAME} was mentioned during an active "
+                f"operator task. Use bash or edit_file THIS turn — deliver ONE file or "
+                f"run ONE verification with quoted output. PASS and 'I will...' are FORBIDDEN."
+            )
+        else:
+            active += (
+                f"\n\nOVERRIDE: @{AGENT_NAME} was directly mentioned. "
+                f"You MUST reply with actual content. PASS is not allowed."
+            )
+    return active
+
+
+def apply_promise_retries(
+    reply: str,
+    external: list[dict],
+    active_prompt: str,
+    history: list,
+    token_counter: ag.TokenCounter,
+    soft_limit: bool,
+    log,
+    max_retries: int = 2,
+) -> str:
+    """Re-prompt until reply has no disallowed promises, or retries exhausted."""
+    attempts = 0
+    while (
+        not soft_limit
+        and reply != "PASS"
+        and has_disallowed_promise(reply)
+        and attempts < max_retries
+    ):
+        log.info(
+            "disallowed promise in reply — retry %d/%d",
+            attempts + 1,
+            max_retries,
+        )
+        promise_nudge = active_prompt + (
+            "\n\nYour reply contained a PROMISE ('I will...' / 'Next, I'll...'). "
+            "That cannot be sent. Use bash/edit_file NOW to create or change ONE file, "
+            "then report only what you DID with quoted command output. "
+            "If you cannot deliver one file this turn, reply PASS."
+        )
+        reply = ag.decide(external, AGENT_NAME, promise_nudge, history, token_counter)
+        log.info(
+            "← promise-retry reply: %s",
+            reply[:120] if reply != "PASS" else "PASS",
+        )
+        attempts += 1
+    return reply
 
 
 def operator_directive_pending(messages: list[dict]) -> bool:
@@ -372,17 +524,18 @@ def main() -> None:
             if operator_directive:
                 log.info("operator directive detected after recheck — applying priority")
 
-        # When explicitly @mentioned, override PASS — the agent MUST respond.
-        active_prompt = system_prompt
-        if operator_directive and op_cmd:
-            active_prompt += build_operator_prompt_section(op_cmd)
+        delegated = was_delegated_to_me(external)
+        active_prompt = build_active_prompt(
+            system_prompt,
+            external,
+            operator_directive=operator_directive,
+            op_cmd=op_cmd,
+            mentioned_me=mentioned_me,
+        )
         if mentioned_me:
-            active_prompt += (
-                f"\n\nOVERRIDE: @{AGENT_NAME} was directly mentioned in the messages above. "
-                f"You MUST reply with actual content. Replying with PASS is not allowed here. "
-                f"If you cannot complete the full task right now, acknowledge and describe what you will do next."
-            )
             log.info("@mentioned — PASS override active")
+        if delegated and operator_directive:
+            log.info("delegation override — tools required this turn")
 
         log.info("→ calling LLM (history=%d entries)", len(history))
         reply = ag.decide(external, AGENT_NAME, active_prompt, history, token_counter)
@@ -405,6 +558,19 @@ def main() -> None:
         if reply == "PASS" and mentioned_me:
             if task_completed_heuristic(external):
                 log.info("task completed — skipping canned ack, staying PASS")
+            elif operator_directive and delegated:
+                log.info("@mentioned + delegation — tool nudge instead of canned ack")
+                tool_nudge = active_prompt + (
+                    "\n\nYou were assigned work. Use bash or edit_file NOW. "
+                    "Do not say PASS. Create or verify ONE file from WORKSPACE GAP."
+                )
+                reply = ag.decide(
+                    external, AGENT_NAME, tool_nudge, history, token_counter,
+                )
+                log.info(
+                    "← delegation-tool reply: %s",
+                    reply[:120] if reply != "PASS" else "PASS",
+                )
             else:
                 canned = "On it! I'll take care of my part now."
                 now_ts = time.time()
@@ -421,18 +587,9 @@ def main() -> None:
                     state.last_canned_at = now_ts
                     log.info("fallback reply used (still PASS after retry)")
 
-        # Empty-promise detection: agent said "I will..." without using tools.
-        # Force retry with strong "use tools NOW" prompt.
-        if not soft_limit and reply != "PASS" and is_empty_promise(reply):
-            log.info("empty promise detected ('I will...' without delivery) — retrying")
-            promise_nudge = active_prompt + (
-                "\n\nYour previous reply was a PROMISE ('I will...'). "
-                "That is FORBIDDEN. Use bash/edit_file NOW to create or modify ONE file, "
-                "then report what you ACTUALLY did with quoted output. "
-                "If you cannot deliver one concrete file this turn, reply PASS instead."
-            )
-            reply = ag.decide(external, AGENT_NAME, promise_nudge, history, token_counter)
-            log.info("← promise-retry reply: %s", reply[:120] if reply != "PASS" else "PASS")
+        reply = apply_promise_retries(
+            reply, external, active_prompt, history, token_counter, soft_limit, log,
+        )
 
         # For unaddressed tasks: nudge once to prevent total silence.
         # Skip nudge for short social messages (greetings etc.) — not SWE tasks.
@@ -456,8 +613,12 @@ def main() -> None:
 
             op_cmd = latest_operator_command(external)
             op_section = build_operator_prompt_section(op_cmd) if op_cmd and has_imperative(op_cmd) else ""
+            gap_section = (
+                build_workspace_gap_section(op_cmd, ag.WORKSPACE_DIR)
+                if op_cmd else ""
+            )
 
-            nudge_prompt = active_prompt + op_section + (
+            nudge_prompt = active_prompt + op_section + gap_section + (
                 f"\n\nWORKSPACE FILES RIGHT NOW:\n{ws_files}\n\n"
                 f"Pick ONE concrete piece of work and execute it with your tools NOW. "
                 f"PASS is FORBIDDEN here."
@@ -467,6 +628,11 @@ def main() -> None:
 
         if reply == "PASS":
             log.info("PASS — sleeping %.1fs", POLL_INTERVAL)
+            time.sleep(POLL_INTERVAL)
+            continue
+
+        if has_disallowed_promise(reply):
+            log.info("ABORT send — reply still contains disallowed promises")
             time.sleep(POLL_INTERVAL)
             continue
 

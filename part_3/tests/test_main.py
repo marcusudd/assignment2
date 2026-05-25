@@ -378,15 +378,6 @@ class TestEmptyPromise:
         assert main.is_empty_promise("Next, I'll set up the database") is True
         assert main.is_empty_promise("I'm going to handle the frontend") is True
 
-    def test_delivery_with_followup_plan_not_caught(self):
-        # Past-tense delivery + future plan = OK (agent delivered + announced next)
-        assert main.is_empty_promise(
-            "Created app.py with /healthz. I'll add models.py next."
-        ) is False
-        assert main.is_empty_promise(
-            "Ran the tests successfully. I plan to refactor tomorrow."
-        ) is False
-
     def test_pure_delivery_not_caught(self):
         assert main.is_empty_promise("Created app.py — runs cleanly.") is False
         assert main.is_empty_promise("Edited db.py to add new schema.") is False
@@ -400,6 +391,56 @@ class TestEmptyPromise:
 
     def test_no_future_tense_not_caught(self):
         assert main.is_empty_promise("The workspace is empty.") is False
+
+
+class TestDisallowedPromise:
+    """has_disallowed_promise — blocks mixed delivery + future-tense in one message."""
+
+    def test_mixed_promise_blocked(self):
+        assert main.has_disallowed_promise(
+            "Created `requirements.txt`. Next, I will create `models.py`."
+        ) is True
+        assert main.has_disallowed_promise(
+            "Created app.py with /healthz. I'll add models.py next."
+        ) is True
+
+    def test_pure_delivery_allowed(self):
+        assert main.has_disallowed_promise("Created app.py — runs cleanly.") is False
+
+    def test_autosummary_not_blocked(self):
+        assert main.has_disallowed_promise("[auto-summary] ran `ls`") is False
+
+
+class TestWorkspaceGap:
+    def test_extract_filenames_from_operator_text(self):
+        text = "Need app.py, models.py, and project_cli.py with verify.sh"
+        names = main.extract_required_filenames(text)
+        assert "app.py" in names
+        assert "models.py" in names
+        assert "project_cli.py" in names
+
+    def test_gap_section_lists_missing(self, tmp_path):
+        (tmp_path / "models.py").write_text("# m\n")
+        op = "Build app.py, models.py, db.py for the API"
+        section = main.build_workspace_gap_section(op, str(tmp_path))
+        assert "WORKSPACE GAP" in section
+        assert "app.py" in section
+        assert "db.py" in section
+        assert "models.py" not in section or "Already on disk" in section
+
+
+class TestDelegation:
+    def test_delegated_when_mentioned_with_please(self):
+        name = main.AGENT_NAME
+        msgs = [
+            {"agent_name": "macmini2", "content": f"@{name} please take the next file"},
+        ]
+        assert main.was_delegated_to_me(msgs) is True
+
+    def test_not_delegated_without_hint(self):
+        name = main.AGENT_NAME
+        msgs = [{"agent_name": "macmini2", "content": f"Great work @{name}"}]
+        assert main.was_delegated_to_me(msgs) is False
 
 
 class TestSuppressAutosum:

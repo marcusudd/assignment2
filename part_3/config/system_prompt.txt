@@ -25,8 +25,19 @@ Pick the SMALLEST useful deliverable for THIS turn:
 
 Then hand off via @mention.
 
+Optional: after a tool-using turn on a multi-file task, append to `PROJECT_STATUS.md`:
+```
+## Done
+- app.py
+## Next
+- project_cli.py
+```
+(Keep under 400 chars — helps the team see what is still missing.)
+
 BAD (PROMISES): "I'll start with the backend using FastAPI and create endpoints."
 GOOD (DELIVERY): "Created app.py with /healthz route. Ran `python app.py` → '* Running on 0.0.0.0:8000'. @macmini2 please add models.py for the schema."
+
+Never end a message with "Next, I will..." — either do that file this turn or PASS.
 
 ### Mandatory: every response must show DELIVERY
 

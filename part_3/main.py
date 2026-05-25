@@ -105,10 +105,22 @@ def is_operator_agent(agent_name: str) -> bool:
 
 
 def latest_operator_command(messages: list[dict]) -> str | None:
-    """Return the most recent message from a human/operator/grader, or None."""
+    """Return the active operator directive — latest message with an imperative.
+
+    Short follow-ups like "go on" or "continue" do not replace a prior
+    "build/create/..." spec; agents keep WORKSPACE GAP and fast-path context.
+    """
     for m in reversed(messages):
-        if is_operator_agent(m["agent_name"]):
+        if is_operator_agent(m["agent_name"]) and has_imperative(m["content"]):
             return m["content"]
+    return None
+
+
+def latest_imperative_operator_message(messages: list[dict]) -> dict | None:
+    """Like latest_operator_command but returns the full message dict (for seq)."""
+    for m in reversed(messages):
+        if is_operator_agent(m["agent_name"]) and has_imperative(m["content"]):
+            return m
     return None
 
 
@@ -158,6 +170,27 @@ def has_disallowed_promise(reply: str) -> bool:
     if _DELIVERY_RE.search(reply) and _PROMISE_RE.search(reply):
         return True
     return False
+
+
+_NON_DELIVERY_RE = re.compile(
+    r"\b(facing|blocked|cannot|can't|failed|error|issue|problem|stuck|"
+    r"repeated|unable|was not|doesn't work|does not work)\b",
+    re.IGNORECASE,
+)
+
+
+def is_non_delivery_reply(reply: str) -> bool:
+    """True when the message complains or stalls without showing completed work."""
+    if not reply or reply == "PASS" or reply.startswith("[auto-summary]"):
+        return False
+    if _DELIVERY_RE.search(reply):
+        return False
+    return _NON_DELIVERY_RE.search(reply) is not None
+
+
+def hub_reply_blocked(reply: str) -> bool:
+    """True if this reply must not be posted to the hub."""
+    return has_disallowed_promise(reply) or is_non_delivery_reply(reply)
 
 
 _NAMED_FILE_RE = re.compile(
@@ -264,7 +297,7 @@ def build_active_prompt(
     return active
 
 
-def apply_promise_retries(
+def apply_send_quality_retries(
     reply: str,
     external: list[dict],
     active_prompt: str,
@@ -274,28 +307,42 @@ def apply_promise_retries(
     log,
     max_retries: int = 2,
 ) -> str:
-    """Re-prompt until reply has no disallowed promises, or retries exhausted."""
+    """Re-prompt until reply is deliverable (no promises / complaint-only prose)."""
     attempts = 0
     while (
         not soft_limit
         and reply != "PASS"
-        and has_disallowed_promise(reply)
+        and hub_reply_blocked(reply)
         and attempts < max_retries
     ):
-        log.info(
-            "disallowed promise in reply — retry %d/%d",
-            attempts + 1,
-            max_retries,
+        if has_disallowed_promise(reply):
+            log.info(
+                "disallowed promise in reply — retry %d/%d",
+                attempts + 1,
+                max_retries,
+            )
+            extra = (
+                "Your reply contained a PROMISE ('I will...' / 'Next, I'll...'). "
+                "That cannot be sent."
+            )
+        else:
+            log.info(
+                "non-delivery reply — retry %d/%d",
+                attempts + 1,
+                max_retries,
+            )
+            extra = (
+                "Your reply described a problem but showed no completed work. "
+                "That cannot be sent."
+            )
+        nudge = active_prompt + (
+            f"\n\n{extra} Use bash/edit_file NOW to create or change ONE file, "
+            f"then report only what you DID with quoted command output. "
+            f"If you cannot deliver one file this turn, reply PASS."
         )
-        promise_nudge = active_prompt + (
-            "\n\nYour reply contained a PROMISE ('I will...' / 'Next, I'll...'). "
-            "That cannot be sent. Use bash/edit_file NOW to create or change ONE file, "
-            "then report only what you DID with quoted command output. "
-            "If you cannot deliver one file this turn, reply PASS."
-        )
-        reply = ag.decide(external, AGENT_NAME, promise_nudge, history, token_counter)
+        reply = ag.decide(external, AGENT_NAME, nudge, history, token_counter)
         log.info(
-            "← promise-retry reply: %s",
+            "← send-quality retry reply: %s",
             reply[:120] if reply != "PASS" else "PASS",
         )
         attempts += 1
@@ -303,9 +350,8 @@ def apply_promise_retries(
 
 
 def operator_directive_pending(messages: list[dict]) -> bool:
-    """True when the latest operator/grader message contains an imperative directive."""
-    op_cmd = latest_operator_command(messages)
-    return has_imperative(op_cmd)
+    """True when an operator/grader imperative directive is still active."""
+    return latest_operator_command(messages) is not None
 
 
 def build_operator_prompt_section(op_cmd: str) -> str:
@@ -323,13 +369,9 @@ def build_operator_prompt_section(op_cmd: str) -> str:
 
 def task_completed_heuristic(messages: list[dict]) -> bool:
     """True when peers reported success and no fresher operator imperative is pending."""
-    latest_op_seq = -1
-    latest_op_imperative = False
-    for m in reversed(messages):
-        if is_operator_agent(m["agent_name"]):
-            latest_op_seq = m.get("seq", 0)
-            latest_op_imperative = has_imperative(m["content"])
-            break
+    imp_op = latest_imperative_operator_message(messages)
+    latest_op_seq = imp_op.get("seq", 0) if imp_op else -1
+    latest_op_imperative = imp_op is not None
 
     last_success_seq = -1
     for m in messages:
@@ -587,7 +629,7 @@ def main() -> None:
                     state.last_canned_at = now_ts
                     log.info("fallback reply used (still PASS after retry)")
 
-        reply = apply_promise_retries(
+        reply = apply_send_quality_retries(
             reply, external, active_prompt, history, token_counter, soft_limit, log,
         )
 
@@ -612,7 +654,7 @@ def main() -> None:
                 ws_files = "(workspace check failed)"
 
             op_cmd = latest_operator_command(external)
-            op_section = build_operator_prompt_section(op_cmd) if op_cmd and has_imperative(op_cmd) else ""
+            op_section = build_operator_prompt_section(op_cmd) if op_cmd else ""
             gap_section = (
                 build_workspace_gap_section(op_cmd, ag.WORKSPACE_DIR)
                 if op_cmd else ""
@@ -631,8 +673,9 @@ def main() -> None:
             time.sleep(POLL_INTERVAL)
             continue
 
-        if has_disallowed_promise(reply):
-            log.info("ABORT send — reply still contains disallowed promises")
+        if hub_reply_blocked(reply):
+            reason = "promises" if has_disallowed_promise(reply) else "non-delivery"
+            log.info("ABORT send — reply blocked (%s)", reason)
             time.sleep(POLL_INTERVAL)
             continue
 

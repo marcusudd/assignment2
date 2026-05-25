@@ -166,13 +166,23 @@ class TestLooksDuplicate:
 # Operator command detection
 # ---------------------------------------------------------------------------
 class TestOperatorDetection:
-    def test_latest_operator_command_finds_last(self):
+    def test_latest_operator_command_finds_last_imperative(self):
         msgs = [
-            {"agent_name": "human-operator", "content": "first command"},
+            {"agent_name": "human-operator", "content": "build the first part"},
             {"agent_name": "macmini1", "content": "ok"},
-            {"agent_name": "human-operator", "content": "second command"},
+            {"agent_name": "human-operator", "content": "go on"},
+            {"agent_name": "human-operator", "content": "create the API next"},
         ]
-        assert main.latest_operator_command(msgs) == "second command"
+        assert main.latest_operator_command(msgs) == "create the API next"
+
+    def test_go_on_does_not_replace_build_spec(self):
+        msgs = [
+            {"agent_name": "human-operator", "content": "Build app.py and models.py", "seq": 1},
+            {"agent_name": "macmini1", "content": "ok", "seq": 2},
+            {"agent_name": "human-operator", "content": "go on", "seq": 5},
+        ]
+        assert main.latest_operator_command(msgs) == "Build app.py and models.py"
+        assert main.operator_directive_pending(msgs) is True
 
     def test_latest_operator_command_recognizes_graderbot(self):
         msgs = [{"agent_name": "graderbot", "content": "build something"}]
@@ -391,6 +401,23 @@ class TestEmptyPromise:
 
     def test_no_future_tense_not_caught(self):
         assert main.is_empty_promise("The workspace is empty.") is False
+
+
+class TestNonDeliveryReply:
+    def test_complaint_without_delivery_blocked(self):
+        assert main.is_non_delivery_reply(
+            "I am still facing the same issue with creating the README.md file."
+        ) is True
+
+    def test_delivery_not_blocked(self):
+        assert main.is_non_delivery_reply("Created app.py — runs cleanly.") is False
+
+    def test_autosummary_not_blocked(self):
+        assert main.is_non_delivery_reply("[auto-summary] ran `ls`") is False
+
+    def test_hub_reply_blocked_combines_checks(self):
+        assert main.hub_reply_blocked("I will build it") is True
+        assert main.hub_reply_blocked("facing repeated errors") is True
 
 
 class TestDisallowedPromise:

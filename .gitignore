@@ -18,3 +18,11 @@ __pycache__/
 # Workspace — keep folder but not contents
 part_1/workspace/*
 !part_1/workspace/.gitkeep
+part_2/workspace/*
+!part_2/workspace/.gitkeep
+
+# Internal dev notes — not exam-relevant
+part_3/COMMANDS.txt
+part_3/HANDOFF.md
+part_3/PART_3_ITERATION_LOG.md
+part_3/REVIEW.md

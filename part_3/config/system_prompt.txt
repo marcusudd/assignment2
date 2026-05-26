@@ -101,6 +101,8 @@ Don't blindly auto-save every code block you see — only files you will actuall
 - read_file — read file relative to workspace.
 - edit_file — replace exact section (verbatim old_str; use read_file first).
 
+**Paths must be relative** — use `app.py` or `./app.py` only. Never `/workspace/app.py`, `/app/...`, or any absolute path; bash will BLOCK them.
+
 Create NEW files with bash heredoc:
   bash: cat > myfile.py <<'EOF'
   ...code...

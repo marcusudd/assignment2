@@ -43,6 +43,13 @@ DEBUG = os.getenv("DEBUG", "").lower() in ("1", "true")
 AUTO_APPROVE = os.getenv("AUTO_APPROVE", "false").lower() in ("1", "true")
 AGENT_NAME = os.getenv("AGENT_NAME", "macmini1")
 
+_last_turn_written_files: list[str] = []
+
+
+def get_last_turn_written_files() -> list[str]:
+    """Paths written via bash/edit_file in the most recent decide() call."""
+    return list(_last_turn_written_files)
+
 TOOLS = [
     {
         "type": "function",
@@ -298,6 +305,9 @@ def decide(
     May call tools before composing the reply.
     Tracks token usage via token_counter.
     """
+    global _last_turn_written_files
+    _last_turn_written_files = []
+
     # Self-echo guard: defence-in-depth in case caller passes unfiltered messages
     if len(new_messages) >= 3 and all(m["agent_name"] == own_name for m in new_messages[-3:]):
         return "PASS"
@@ -326,11 +336,17 @@ def decide(
     tools_used = False
     report_forced = False
     this_turn_tools: list[str] = []  # Track for auto-fallback if LLM refuses to report
+    this_turn_files: list[str] = []  # Files written this turn — pasted in auto-fallback
+
+    def _finish(reply: str) -> str:
+        _last_turn_written_files[:] = this_turn_files
+        return reply
+
     for _ in range(MAX_ROUNDS):
         response = _call_llm(history, system_prompt)
         if response is None or not response.choices:
             _rollback(history)
-            return "PASS"
+            return _finish("PASS")
 
         if response.usage:
             token_counter.add(response.usage.total_tokens)
@@ -363,10 +379,9 @@ def decide(
             if not reply:
                 # Empty reply: if tools were used, generate fallback instead of going silent
                 if tools_used and this_turn_tools:
-                    actions = this_turn_tools[-4:]
                     print("[decide] empty reply after tools — using auto-fallback", file=sys.stderr)
-                    return f"[auto-summary] Actions this turn: {'; '.join(actions)}."
-                return "PASS"
+                    return _finish(_build_autosummary(this_turn_tools, this_turn_files))
+                return _finish("PASS")
             # If LLM used tools but said PASS, force one retry demanding a report
             if reply.upper() == "PASS" and tools_used and not report_forced:
                 report_forced = True
@@ -382,11 +397,9 @@ def decide(
                 continue
             # Retry failed; if tools were used, generate auto-fallback so chat isn't silent
             if reply.upper() == "PASS" and tools_used and this_turn_tools:
-                actions = this_turn_tools[-4:]
-                fallback = f"[auto-summary] Actions this turn: {'; '.join(actions)}."
-                print(f"[decide] LLM refused report after tools — using auto-fallback", file=sys.stderr)
-                return fallback
-            return "PASS" if reply.upper() == "PASS" else reply
+                print("[decide] LLM refused report after tools — using auto-fallback", file=sys.stderr)
+                return _finish(_build_autosummary(this_turn_tools, this_turn_files))
+            return _finish("PASS" if reply.upper() == "PASS" else reply)
 
         if finish_reason == "tool_calls":
             tools_used = True
@@ -407,9 +420,16 @@ def decide(
                 # Track for auto-fallback
                 tname = tc.function.name
                 if tname == "bash":
-                    this_turn_tools.append(f"ran `{inputs.get('command', '')[:60]}`")
+                    cmd = inputs.get("command", "")
+                    this_turn_tools.append(f"ran `{cmd[:60]}`")
+                    written = _extract_written_file(cmd)
+                    if written:
+                        this_turn_files.append(written)
                 elif tname == "edit_file":
-                    this_turn_tools.append(f"edited `{inputs.get('path', '?')}`")
+                    path = inputs.get("path", "?")
+                    this_turn_tools.append(f"edited `{path}`")
+                    if path and path != "?":
+                        this_turn_files.append(path)
                 elif tname == "read_file":
                     this_turn_tools.append(f"read `{inputs.get('path', '?')}`")
                 # Store trimmed result in history — full output already seen by LLM this round.
@@ -422,21 +442,69 @@ def decide(
             continue
 
         _rollback(history)
-        return "PASS"
+        return _finish("PASS")
 
     # MAX_ROUNDS exhausted without "stop" — if tools were used, generate fallback report
     if tools_used and this_turn_tools:
-        actions = this_turn_tools[-4:]
-        fallback = f"[auto-summary] Actions this turn: {'; '.join(actions)} (max rounds reached)."
         print("[decide] MAX_ROUNDS reached with tools — using auto-fallback", file=sys.stderr)
-        return fallback
+        return _finish(
+            _build_autosummary(this_turn_tools, this_turn_files, suffix=" (max rounds reached)"),
+        )
     _rollback(history)
-    return "PASS"
+    return _finish("PASS")
 
 
 def _rollback(history: list) -> None:
     while history and history[-1]["role"] in ("tool", "assistant"):
         history.pop()
+
+
+_WRITE_FILE_RE = re.compile(
+    r">>?\s*['\"]?([\w./-]+\.[\w]+)['\"]?",
+)
+
+_LANG_BY_EXT = {
+    "py": "python", "js": "javascript", "ts": "typescript", "jsx": "jsx",
+    "tsx": "tsx", "sh": "bash", "md": "markdown", "sql": "sql", "json": "json",
+    "yaml": "yaml", "yml": "yaml", "html": "html", "css": "css", "toml": "toml",
+}
+
+
+def _extract_written_file(command: str) -> str | None:
+    """Return filename from a heredoc/redirect bash command, if any."""
+    if not command:
+        return None
+    m = _WRITE_FILE_RE.search(command)
+    return m.group(1) if m else None
+
+
+def _build_autosummary(
+    tools: list[str], files: list[str], suffix: str = "",
+) -> str:
+    """Compose the [auto-summary] fallback message, pasting last-written file if small."""
+    actions = tools[-4:]
+    base = f"[auto-summary] Actions this turn: {'; '.join(actions)}{suffix}."
+    if not files:
+        return base
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for f in files:
+        if f not in seen:
+            seen.add(f)
+            ordered.append(f)
+    target = ordered[-1]
+    try:
+        p = Path(WORKSPACE_DIR) / target
+        if not p.is_file():
+            return base
+        content = p.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return base
+    if len(content) > 3000:
+        return base + f"\n\nFile `{target}` ({len(content)} chars — full file on workspace)."
+    ext = target.rsplit(".", 1)[-1].lower() if "." in target else ""
+    lang = _LANG_BY_EXT.get(ext, "")
+    return base + f"\n\nFile `{target}`:\n```{lang}\n{content}\n```"
 
 
 

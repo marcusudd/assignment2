@@ -193,6 +193,135 @@ def hub_reply_blocked(reply: str) -> bool:
     return has_disallowed_promise(reply) or is_non_delivery_reply(reply)
 
 
+_FILE_EXT = r"(?:py|js|ts|jsx|tsx|sh|md|sql|json|ya?ml|html|css|toml|ini|cfg)"
+
+_CREATED_FILE_RE = re.compile(
+    r"(?:^|[.!:\n])\s*"
+    r"\b(skapade|skrev|created|modified|wrote|added|implementerade|implementerat|"
+    r"updated|uppdaterade|skapat|skrivit)\b"
+    r"\s+(?:filen?\s+|the\s+|den\s+|en\s+|new\s+|ny\s+)?[`']?"
+    rf"([\w./-]+\.{_FILE_EXT})[`']?",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+_PASSIVE_VERB_RE = re.compile(
+    r"\b(?:have been|has been|were|was|är|har blivit|har)\s+"
+    r"(?:created|skapade|skapats|modified|modifierade|uppdaterade|"
+    r"written|skrivna|verified|verifierade)\b",
+    re.IGNORECASE,
+)
+
+_CLAUSE_FILE_RE = re.compile(
+    rf"[`']([\w./-]+\.{_FILE_EXT})[`']|\b([\w./-]+\.{_FILE_EXT})\b",
+    re.IGNORECASE,
+)
+
+
+def _iter_claimed_filenames(reply: str) -> list[str]:
+    """Filenames the reply claims were created or modified (active or passive voice)."""
+    seen: set[str] = set()
+    out: list[str] = []
+
+    def add(name: str) -> None:
+        if name not in seen:
+            seen.add(name)
+            out.append(name)
+
+    for m in _CREATED_FILE_RE.finditer(reply):
+        add(m.group(2))
+
+    for m in _PASSIVE_VERB_RE.finditer(reply):
+        clause = reply[max(0, m.start() - 200):m.start()]
+        for fm in _CLAUSE_FILE_RE.finditer(clause):
+            add(fm.group(1) or fm.group(2))
+
+    return out
+
+
+def claims_file_without_code_block(reply: str) -> str | None:
+    """If reply claims a created/modified code file but pastes no fenced block, return its name.
+
+    CODE TRANSFER rule: when an agent creates a file the hub message must include
+    the full content so peers can sync their local workspace. Returns the first
+    claimed filename when the rule is violated, or None when the message is fine.
+    """
+    if not reply or reply == "PASS" or reply.startswith("[auto-summary]"):
+        return None
+    if "```" in reply:
+        return None
+    names = _iter_claimed_filenames(reply)
+    return names[0] if names else None
+
+
+_CODE_FILE_SUFFIXES = frozenset({
+    ".py", ".js", ".ts", ".jsx", ".tsx", ".sh", ".md", ".sql", ".json",
+    ".yaml", ".yml", ".html", ".css", ".toml", ".ini", ".cfg",
+})
+
+
+def _filename_mentioned(reply: str, filename: str) -> bool:
+    """True if filename appears as its own token (not as substring of another name)."""
+    return bool(
+        re.search(rf"(?<![\w./-]){re.escape(filename)}(?![\w-])", reply),
+    )
+
+
+def _filename_near_codeblock(reply: str, filename: str) -> bool:
+    """True if filename appears just before a fence or inside a fenced block."""
+    for m in re.finditer(r"```", reply):
+        window = reply[max(0, m.start() - 120):m.start()]
+        if filename in window:
+            return True
+    for block in re.findall(r"```[^\n]*\n(.*?)```", reply, re.DOTALL):
+        if filename in block:
+            return True
+    return False
+
+
+def written_files_missing_paste(reply: str, written_files: list[str]) -> str | None:
+    """First code file written via tools this turn that lacks a fenced paste in reply."""
+    if not written_files or not reply or reply == "PASS" or reply.startswith("[auto-summary]"):
+        return None
+    names = [
+        Path(f).name
+        for f in written_files
+        if Path(f).suffix.lower() in _CODE_FILE_SUFFIXES
+    ]
+    if not names:
+        return None
+    if "```" not in reply:
+        return names[0]
+    for name in names:
+        if not _filename_mentioned(reply, name):
+            return name
+        if not _filename_near_codeblock(reply, name):
+            return name
+    return None
+
+
+def claims_nonexistent_file(reply: str, workspace_dir: str) -> str | None:
+    """If reply claims a created/modified file but it isn't on disk, return its name.
+
+    Anti-hallucination gate: catches LLM messages that look like clean deliveries
+    ('Klar med: Created app.py ...') when the agent actually invoked zero tools
+    and the file does not exist in the workspace. Matched by filename (not path)
+    via rglob so files nested in subdirs still count.
+    """
+    if not reply or reply == "PASS" or reply.startswith("[auto-summary]"):
+        return None
+    names = _iter_claimed_filenames(reply)
+    if not names:
+        return None
+    root = Path(workspace_dir)
+    for claimed in names:
+        target = Path(claimed).name
+        if not root.exists():
+            return claimed
+        if not any(p.is_file() and p.name == target for p in root.rglob("*")):
+            return claimed
+    return None
+
+
 _NAMED_FILE_RE = re.compile(
     r"`([\w./-]+\.(?:py|sh|md|txt|sql|json))`"
     r"|\b([a-z][\w]*\.(?:py|sh|md|txt|sql))\b",
@@ -329,14 +458,14 @@ def apply_send_quality_retries(
     log,
     max_retries: int = 2,
 ) -> str:
-    """Re-prompt until reply is deliverable (no promises / complaint-only prose)."""
+    """Re-prompt until reply is deliverable (no promises / complaint / missing paste / hallucinated)."""
+    written_this_turn = ag.get_last_turn_written_files()
     attempts = 0
-    while (
-        not soft_limit
-        and reply != "PASS"
-        and hub_reply_blocked(reply)
-        and attempts < max_retries
-    ):
+    while not soft_limit and reply != "PASS" and attempts < max_retries:
+        hallucinated = claims_nonexistent_file(reply, ag.WORKSPACE_DIR)
+        missing_paste = claims_file_without_code_block(reply)
+        missing_written = written_files_missing_paste(reply, written_this_turn)
+        bad_file = hallucinated or missing_paste or missing_written
         if has_disallowed_promise(reply):
             log.info(
                 "disallowed promise in reply — retry %d/%d",
@@ -347,7 +476,7 @@ def apply_send_quality_retries(
                 "Your reply contained a PROMISE ('I will...' / 'Next, I'll...'). "
                 "That cannot be sent."
             )
-        else:
+        elif is_non_delivery_reply(reply):
             log.info(
                 "non-delivery reply — retry %d/%d",
                 attempts + 1,
@@ -357,10 +486,49 @@ def apply_send_quality_retries(
                 "Your reply described a problem but showed no completed work. "
                 "That cannot be sent."
             )
+        elif hallucinated:
+            log.info(
+                "claim of `%s` but file not on disk — retry %d/%d",
+                hallucinated,
+                attempts + 1,
+                max_retries,
+            )
+            extra = (
+                f"Your reply claims you created or modified `{hallucinated}`, but that "
+                f"file does NOT exist in the workspace. You may be hallucinating delivery. "
+                f"Use bash (heredoc `cat > {hallucinated} <<'EOF'`) NOW to ACTUALLY "
+                f"create the file, then resend with the real content."
+            )
+        elif missing_paste:
+            log.info(
+                "missing code paste for `%s` — retry %d/%d",
+                missing_paste,
+                attempts + 1,
+                max_retries,
+            )
+            extra = (
+                f"Your reply claims you created or modified `{missing_paste}` but did not "
+                f"paste the file. CODE TRANSFER rule: include the full file content inside "
+                f"a fenced ```language ... ``` block so peers can sync their workspace."
+            )
+        elif missing_written:
+            log.info(
+                "tool wrote `%s` but no code block in reply — retry %d/%d",
+                missing_written,
+                attempts + 1,
+                max_retries,
+            )
+            extra = (
+                f"You wrote `{missing_written}` via tools this turn but did not paste its "
+                f"content in your message. CODE TRANSFER: every file you create must appear "
+                f"in a fenced ```language ... ``` block (one block per file) so peers can sync."
+            )
+        else:
+            break
         nudge = active_prompt + (
-            f"\n\n{extra} Use bash/edit_file NOW to create or change ONE file, "
-            f"then report only what you DID with quoted command output. "
-            f"If you cannot deliver one file this turn, reply PASS."
+            f"\n\n{extra} Use bash (`cat {bad_file or 'file'}`) or edit_file NOW, "
+            f"then resend WITH the full file pasted in a fenced code block. "
+            f"If you cannot deliver this turn, reply PASS."
         )
         reply = ag.decide(external, AGENT_NAME, nudge, history, token_counter)
         log.info(

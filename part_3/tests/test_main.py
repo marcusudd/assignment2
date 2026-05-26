@@ -484,6 +484,183 @@ class TestDisallowedPromise:
         assert main.has_disallowed_promise("[auto-summary] ran `ls`") is False
 
 
+class TestClaimsFileWithoutCodeBlock:
+    """CODE TRANSFER gate — agent claims a file but doesn't paste content."""
+
+    def test_swedish_klar_med_without_paste(self):
+        msg = "Klar med: Skapade app.py med en enkel Flask-applikation."
+        assert main.claims_file_without_code_block(msg) == "app.py"
+
+    def test_english_created_without_paste(self):
+        msg = "Done with: Created models.py with the User schema."
+        assert main.claims_file_without_code_block(msg) == "models.py"
+
+    def test_modified_without_paste(self):
+        assert main.claims_file_without_code_block("Modified db.py — added migration.") == "db.py"
+
+    def test_paste_present_passes(self):
+        msg = (
+            "Klar med: Skapade app.py med Flask.\n"
+            "```python\nfrom flask import Flask\n```"
+        )
+        assert main.claims_file_without_code_block(msg) is None
+
+    def test_no_file_claim_passes(self):
+        assert main.claims_file_without_code_block("Verified the API returns 200.") is None
+
+    def test_pass_passes(self):
+        assert main.claims_file_without_code_block("PASS") is None
+
+    def test_autosummary_passes(self):
+        msg = "[auto-summary] Actions this turn: ran `cat > app.py`."
+        assert main.claims_file_without_code_block(msg) is None
+
+    def test_backticked_filename_detected(self):
+        msg = "Klar med: Skapade `test_app.py` med en pytest-fixture."
+        assert main.claims_file_without_code_block(msg) == "test_app.py"
+
+    def test_attribution_to_other_agent_passes(self):
+        msg = "I see macmini2 created app.py with /healthz."
+        assert main.claims_file_without_code_block(msg) is None
+
+    def test_passive_have_been_created_without_paste(self):
+        msg = (
+            "I ran the tests and they passed successfully. "
+            "Both `app.py` and `test_app.py` have been created and verified."
+        )
+        assert main.claims_file_without_code_block(msg) == "app.py"
+
+
+class TestClaimsNonexistentFile:
+    """Anti-hallucination gate — claim of created file that isn't on disk."""
+
+    def test_hallucinated_file_detected(self, tmp_path):
+        msg = "Klar med: Created test_app.py with a pytest test."
+        assert main.claims_nonexistent_file(msg, str(tmp_path)) == "test_app.py"
+
+    def test_existing_file_passes(self, tmp_path):
+        (tmp_path / "test_app.py").write_text("# test\n", encoding="utf-8")
+        msg = "Klar med: Created test_app.py with a pytest test."
+        assert main.claims_nonexistent_file(msg, str(tmp_path)) is None
+
+    def test_file_in_subdir_passes(self, tmp_path):
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "app.py").write_text("from flask import Flask\n", encoding="utf-8")
+        msg = "Done with: Created app.py with the Flask scaffold."
+        assert main.claims_nonexistent_file(msg, str(tmp_path)) is None
+
+    def test_no_claim_passes(self, tmp_path):
+        assert main.claims_nonexistent_file("PASS", str(tmp_path)) is None
+        assert main.claims_nonexistent_file(
+            "Verified the API returns 200.", str(tmp_path),
+        ) is None
+
+    def test_autosummary_passes(self, tmp_path):
+        msg = "[auto-summary] Actions this turn: ran `cat > app.py`."
+        assert main.claims_nonexistent_file(msg, str(tmp_path)) is None
+
+    def test_attribution_to_other_agent_passes(self, tmp_path):
+        # "macmini2 created app.py" — not first-person, sentence doesn't start with verb
+        msg = "I see macmini2 created app.py with /healthz."
+        assert main.claims_nonexistent_file(msg, str(tmp_path)) is None
+
+    def test_missing_workspace_dir_still_blocks(self, tmp_path):
+        msg = "Klar med: Created models.py with User schema."
+        ghost = tmp_path / "does-not-exist"
+        assert main.claims_nonexistent_file(msg, str(ghost)) == "models.py"
+
+    def test_passive_have_been_created_detected(self, tmp_path):
+        msg = (
+            "I ran the tests and they passed successfully. "
+            "Both `app.py` and `test_app.py` have been created and verified."
+        )
+        assert main.claims_nonexistent_file(msg, str(tmp_path)) == "app.py"
+
+    def test_passive_first_missing_file_returned(self, tmp_path):
+        (tmp_path / "app.py").write_text("from flask import Flask\n", encoding="utf-8")
+        msg = "Both `app.py` and `test_app.py` have been created."
+        assert main.claims_nonexistent_file(msg, str(tmp_path)) == "test_app.py"
+
+    def test_swedish_passive_har_skapats(self, tmp_path):
+        msg = "Både `app.py` och `test_app.py` har skapats och verifierats."
+        assert main.claims_nonexistent_file(msg, str(tmp_path)) == "app.py"
+
+
+class TestWrittenFilesMissingPaste:
+    """Gate: every file written via tools this turn must appear in a code block."""
+
+    def test_unmentioned_written_file(self):
+        reply = (
+            "Done with: created `test_app.py`.\n"
+            "```python\nimport pytest\nfrom app import app\n```"
+        )
+        written = ["app.py", "test_app.py"]
+        assert main.written_files_missing_paste(reply, written) == "app.py"
+
+    def test_all_written_files_pasted(self):
+        reply = (
+            "Done with: created both files.\n"
+            "app.py:\n```python\nfrom flask import Flask\n```\n"
+            "test_app.py:\n```python\nimport pytest\n```"
+        )
+        written = ["app.py", "test_app.py"]
+        assert main.written_files_missing_paste(reply, written) is None
+
+    def test_autosummary_skipped(self):
+        reply = "[auto-summary] Actions this turn: ran `cat > app.py`"
+        assert main.written_files_missing_paste(reply, ["app.py"]) is None
+
+    def test_pass_skipped(self):
+        assert main.written_files_missing_paste("PASS", ["app.py"]) is None
+
+    def test_no_code_blocks_when_written(self):
+        assert main.written_files_missing_paste(
+            "Done with: created app.py.", ["app.py"],
+        ) == "app.py"
+
+
+class TestAutosummaryHelpers:
+    """Auto-summary builder pastes the last-written file when small enough."""
+
+    def test_extract_written_file_from_heredoc(self):
+        assert agent._extract_written_file("cat > app.py <<'EOF'") == "app.py"
+        assert agent._extract_written_file("cat >> notes.md") == "notes.md"
+        assert agent._extract_written_file("printf 'x' > out.txt") == "out.txt"
+        assert agent._extract_written_file("tee >> log.txt") == "log.txt"
+
+    def test_extract_written_file_none_for_read(self):
+        assert agent._extract_written_file("cat app.py") is None
+        assert agent._extract_written_file("ls -la") is None
+
+    def test_build_autosummary_pastes_small_file(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(agent, "WORKSPACE_DIR", str(tmp_path))
+        (tmp_path / "hello.py").write_text("print('hi')\n", encoding="utf-8")
+        out = agent._build_autosummary(
+            ["ran `cat > hello.py`"], ["hello.py"],
+        )
+        assert "[auto-summary]" in out
+        assert "```python" in out
+        assert "print('hi')" in out
+
+    def test_build_autosummary_summarizes_large_file(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(agent, "WORKSPACE_DIR", str(tmp_path))
+        (tmp_path / "big.py").write_text("x = 1\n" * 800, encoding="utf-8")
+        out = agent._build_autosummary(["ran `cat > big.py`"], ["big.py"])
+        assert "```" not in out
+        assert "full file on workspace" in out
+
+    def test_build_autosummary_no_files(self):
+        out = agent._build_autosummary(["read `app.py`"], [])
+        assert out.startswith("[auto-summary]")
+        assert "```" not in out
+
+    def test_build_autosummary_missing_file_safe(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(agent, "WORKSPACE_DIR", str(tmp_path))
+        out = agent._build_autosummary(["edited `gone.py`"], ["gone.py"])
+        assert out.startswith("[auto-summary]")
+        assert "```" not in out
+
+
 class TestWorkspaceGap:
     def test_extract_filenames_from_operator_text(self):
         text = "Need app.py, models.py, and project_cli.py with verify.sh"

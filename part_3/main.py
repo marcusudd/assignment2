@@ -389,8 +389,19 @@ def build_operator_prompt_section(op_cmd: str) -> str:
     )
 
 
-def task_completed_heuristic(messages: list[dict]) -> bool:
-    """True when peers reported success and no fresher operator imperative is pending."""
+def task_completed_heuristic(
+    messages: list[dict],
+    op_cmd: str | None = None,
+    workspace_dir: str | None = None,
+) -> bool:
+    """True when peers reported success AND all operator-spec files exist on disk.
+
+    Chat-only heuristic when op_cmd / workspace_dir are not provided.
+    When provided: also requires that every filename in the operator's
+    spec is actually present in the workspace. Prevents premature PASS
+    on multi-file tasks where peers said "X works" but other required
+    files (e.g. README.md) are still missing.
+    """
     imp_op = latest_imperative_operator_message(messages)
     latest_op_seq = imp_op.get("seq", 0) if imp_op else -1
     latest_op_imperative = imp_op is not None
@@ -407,6 +418,16 @@ def task_completed_heuristic(messages: list[dict]) -> bool:
         return False
     if latest_op_imperative and latest_op_seq > last_success_seq:
         return False
+
+    # Workspace-aware check (only when caller provides both args).
+    # If the operator's spec named multiple files and some are still
+    # missing on disk, the task is NOT complete regardless of chat claims.
+    if op_cmd and workspace_dir:
+        required = extract_required_filenames(op_cmd)
+        if len(required) >= 2:
+            present = list_workspace_filenames(workspace_dir)
+            if any(f not in present for f in required):
+                return False
     return True
 
 
@@ -625,7 +646,7 @@ def main() -> None:
             log.info("← retry reply: %s", reply[:120] if reply != "PASS" else "PASS")
 
         if reply == "PASS" and mentioned_me:
-            if task_completed_heuristic(external):
+            if task_completed_heuristic(external, op_cmd, ag.WORKSPACE_DIR):
                 log.info("task completed — skipping canned ack, staying PASS")
             elif operator_directive and delegated:
                 log.info("@mentioned + delegation — tool nudge instead of canned ack")

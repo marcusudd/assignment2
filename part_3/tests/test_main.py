@@ -257,6 +257,52 @@ class TestOperatorDetection:
         msgs = [{"agent_name": "human-operator", "content": "build something", "seq": 1}]
         assert main.task_completed_heuristic(msgs) is False
 
+    def test_task_completed_false_when_required_file_missing(self, tmp_path):
+        # 3 files required (tasks.json, todo.py, README.md), only 2 exist on disk
+        (tmp_path / "tasks.json").write_text("[]")
+        (tmp_path / "todo.py").write_text("# cli")
+        msgs = [
+            {"agent_name": "human-operator", "content":
+             "build tasks.json, todo.py, README.md", "seq": 3},
+            {"agent_name": "macmini2", "content": "todo.py is working correctly", "seq": 10},
+        ]
+        # Without workspace check → True (peer reported success)
+        assert main.task_completed_heuristic(msgs) is True
+        # With workspace check → False (README.md missing)
+        assert main.task_completed_heuristic(
+            msgs,
+            op_cmd="build tasks.json, todo.py, README.md",
+            workspace_dir=str(tmp_path),
+        ) is False
+
+    def test_task_completed_true_when_all_required_present(self, tmp_path):
+        (tmp_path / "tasks.json").write_text("[]")
+        (tmp_path / "todo.py").write_text("# cli")
+        (tmp_path / "README.md").write_text("# usage")
+        msgs = [
+            {"agent_name": "human-operator", "content":
+             "build tasks.json, todo.py, README.md", "seq": 3},
+            {"agent_name": "macmini2", "content": "todo.py is working correctly", "seq": 10},
+        ]
+        assert main.task_completed_heuristic(
+            msgs,
+            op_cmd="build tasks.json, todo.py, README.md",
+            workspace_dir=str(tmp_path),
+        ) is True
+
+    def test_task_completed_workspace_check_skipped_for_single_file(self, tmp_path):
+        # Single-file task — workspace check only kicks in for multi-file (>=2)
+        msgs = [
+            {"agent_name": "human-operator", "content": "build hello.py", "seq": 3},
+            {"agent_name": "macmini2", "content": "hello.py is working", "seq": 10},
+        ]
+        # Even though hello.py doesn't exist on disk, single-file → don't gate
+        assert main.task_completed_heuristic(
+            msgs,
+            op_cmd="build hello.py",
+            workspace_dir=str(tmp_path),
+        ) is True
+
 
 # ---------------------------------------------------------------------------
 # Console commands

@@ -952,3 +952,61 @@ class TestDecideSelfEcho:
 
         assert result == "Hi Alice!"
         assert tc.total == 50
+
+
+class TestSplitForHub:
+    def test_short_message_unchanged(self):
+        msg = "Hello world"
+        assert main.split_for_hub(msg) == [msg]
+
+    def test_exact_max_len_unchanged(self):
+        msg = "x" * 4090
+        assert main.split_for_hub(msg) == [msg]
+
+    def test_splits_at_code_block_boundary(self):
+        code = "```python\n" + "x = 1\n" * 800 + "```\n"
+        rest = "More text after the block."
+        full = code + rest
+        assert len(full) > 4090
+        chunks = main.split_for_hub(full)
+        assert len(chunks) == 2
+        assert "```" in chunks[0]
+        assert chunks[1].startswith("(cont.)")
+
+    def test_splits_at_newline_when_no_code_block(self):
+        lines = ("A line of text.\n" * 260)
+        assert len(lines) > 4090
+        chunks = main.split_for_hub(lines)
+        assert len(chunks) >= 2
+        for chunk in chunks[:-1]:
+            assert len(chunk) <= 4090
+
+    def test_continuation_prefix_on_subsequent_chunks(self):
+        long_text = "word " * 900
+        chunks = main.split_for_hub(long_text)
+        assert len(chunks) >= 2
+        for chunk in chunks[1:]:
+            assert chunk.startswith("(cont.)")
+
+    def test_all_chunks_within_max_len(self):
+        big = "```python\n" + ("y = 2\n" * 200) + "```\n" + ("z = 3\n" * 200)
+        for chunk in main.split_for_hub(big):
+            assert len(chunk) <= 4090
+
+
+class TestColonAddressRouting:
+    def test_agent_name_with_hyphen_matches(self):
+        assert main._COLON_ADDRESS_RE.match("emil-flyghed-agent: please add subtract")
+        assert main._COLON_ADDRESS_RE.match("magnus-swe: can you verify?")
+        assert main._COLON_ADDRESS_RE.match("hassan-swe-agent: do this")
+
+    def test_at_prefix_not_caught_by_colon_re(self):
+        assert not main._COLON_ADDRESS_RE.match("@emil-flyghed-agent please help")
+
+    def test_single_word_not_caught(self):
+        assert not main._COLON_ADDRESS_RE.match("Status: everything is done")
+        assert not main._COLON_ADDRESS_RE.match("Update: tests pass")
+        assert not main._COLON_ADDRESS_RE.match("agent1: task here")
+
+    def test_all_agents_not_caught(self):
+        assert not main._COLON_ADDRESS_RE.match("All agents: please build the app")

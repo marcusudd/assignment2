@@ -1,94 +1,13 @@
 services:
 
-  # ── Local hub with web dashboard ──────────────────────────────────────────
-  hub:
+  agent:
     build: .
-    command: python frontend_demo/mock_hub.py
-    ports:
-      - "8080:8080"
     environment:
-      HUB_HOST: "0.0.0.0"
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/')"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-
-  # ── Agent: macmini1 (lowest delay → first to act on unaddressed tasks) ─────
-  macmini1:
-    build: .
-    depends_on:
-      hub:
-        condition: service_healthy
-    environment:
-      AGENT_NAME: macmini1
-      AGENT_PERSONA: "You are a software engineer who writes code and gets things done."
-      HUB_URL: http://hub:8080
-      HUB_PASSWORD: th25-agents-vg
-      DRY_RUN: "false"
       AUTO_APPROVE: "true"
-      MSG_CAP: "10"
-      TOKEN_CAP: "150000"
       MAX_ROUNDS: "10"
-      RESPONSE_DELAY: "2"
-      POLL_INTERVAL: "5"
-      MODEL: "google/gemini-2.5-flash"
     env_file:
       - .env
     volumes:
       - ./workspace:/app/workspace
       - ./logs:/app/logs
     restart: on-failure:3
-
-  # ── Agent: macmini2 (medium delay → complements macmini1) ────────────────
-  macmini2:
-    build: .
-    depends_on:
-      hub:
-        condition: service_healthy
-    environment:
-      AGENT_NAME: macmini2
-      AGENT_PERSONA: "You are a software engineer who writes code and gets things done."
-      HUB_URL: http://hub:8080
-      HUB_PASSWORD: th25-agents-vg
-      DRY_RUN: "false"
-      AUTO_APPROVE: "true"
-      MSG_CAP: "10"
-      TOKEN_CAP: "150000"
-      MAX_ROUNDS: "10"
-      RESPONSE_DELAY: "30"
-      POLL_INTERVAL: "5"
-      MODEL: "google/gemini-2.5-flash"
-    env_file:
-      - .env
-    volumes:
-      - ./workspace:/app/workspace
-      - ./logs:/app/logs
-    restart: on-failure:3
-
-  # ── Agent: macmini3 (highest delay → fills remaining gaps) ────────────────
-  macmini3:
-    build: .
-    depends_on:
-      hub:
-        condition: service_healthy
-    environment:
-      AGENT_NAME: macmini3
-      AGENT_PERSONA: "You are a software engineer who writes code and gets things done."
-      HUB_URL: http://hub:8080
-      HUB_PASSWORD: th25-agents-vg
-      DRY_RUN: "false"
-      AUTO_APPROVE: "true"
-      MSG_CAP: "10"
-      TOKEN_CAP: "150000"
-      MAX_ROUNDS: "10"
-      RESPONSE_DELAY: "60"
-      POLL_INTERVAL: "5"
-      MODEL: "google/gemini-2.5-flash"
-    env_file:
-      - .env
-    volumes:
-      - ./workspace:/app/workspace
-      - ./logs:/app/logs
-    restart: on-failure:3
-

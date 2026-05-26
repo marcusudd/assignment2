@@ -60,6 +60,31 @@ _IMPERATIVE_RE = re.compile(
     re.IGNORECASE,
 )
 _MENTION_ME_RE = re.compile(rf"@{re.escape(AGENT_NAME)}\b")
+_COLON_ADDRESS_RE = re.compile(r"^[\w][\w]*-[\w-]+\s*:", re.IGNORECASE)
+_COORDINATION_RE = re.compile(
+    r"\b(distribute|dela upp|koordinera|coordinate|assign.{0,5}roles?|fördela|"
+    r"split.{0,10}roles?|decide.{0,10}roles?)\b",
+    re.IGNORECASE,
+)
+# Explicit peer task-claim phrases — if a peer just claimed work, nudge is suppressed.
+_PEER_CLAIM_RE = re.compile(
+    r"\b(jag tar mig an|taking:|i'll handle|confirmed,?\s*taking|bekräftat)\b",
+    re.IGNORECASE,
+)
+# Pure social messages — no SWE task implied.
+_SOCIAL_ONLY_RE = re.compile(
+    r"^(hej[!.]?|hi[!.]?|hello[!.]?|hey[!.]?|tjena[!.]?|hallå[!.]?"
+    r"|good\s+(morning|afternoon|evening)[!.]?"
+    r"|[\w-]+\s+is\s+(going\s+)?(offline|online)[.!]?.*"
+    r"|goodbye[!.]?|bye[!.]?)$",
+    re.IGNORECASE | re.DOTALL,
+)
+# Operator silence commands — force immediate PASS without calling LLM.
+_SILENCE_DIRECTIVE_RE = re.compile(
+    r"\b(cease|desist|be\s+quiet|stop\s+talking|stop\s+responding|go\s+silent|"
+    r"tyst|håll\s+käften|var\s+tyst|silence)\b",
+    re.IGNORECASE,
+)
 _SUCCESS_MARKERS = re.compile(
     r"\b(complete|completed|working|delivered|verified|fully working|"
     r"runs cleanly|full stack|is fully working)\b",
@@ -191,6 +216,31 @@ def is_non_delivery_reply(reply: str) -> bool:
 def hub_reply_blocked(reply: str) -> bool:
     """True if this reply must not be posted to the hub."""
     return has_disallowed_promise(reply) or is_non_delivery_reply(reply)
+
+
+def split_for_hub(reply: str, max_len: int = 4090) -> list[str]:
+    """Split reply into chunks ≤ max_len at code-block or newline boundaries."""
+    if len(reply) <= max_len:
+        return [reply]
+    chunks: list[str] = []
+    rest = reply
+    while len(rest) > max_len:
+        fence = rest.rfind("```", 0, max_len)
+        if fence > 50:
+            cut = fence + 3
+            if cut < len(rest) and rest[cut] == "\n":
+                cut += 1
+        else:
+            cut = rest.rfind("\n", 0, max_len - 10)
+            if cut < 0:
+                cut = max_len - 10
+        chunks.append(rest[:cut].rstrip())
+        rest = rest[cut:].lstrip("\n")
+        if rest:
+            rest = "(cont.) " + rest
+    if rest:
+        chunks.append(rest)
+    return chunks
 
 
 _FILE_EXT = r"(?:py|js|ts|jsx|tsx|sh|md|sql|json|ya?ml|html|css|toml|ini|cfg)"
@@ -433,6 +483,15 @@ def build_active_prompt(
         active += build_operator_prompt_section(op_cmd)
         active += build_workspace_gap_section(op_cmd, ag.WORKSPACE_DIR)
         active += read_project_status_section(ag.WORKSPACE_DIR)
+    # Warn about active peer claims so the LLM doesn't duplicate claimed work.
+    for m in external:
+        if m["agent_name"] != AGENT_NAME and _PEER_CLAIM_RE.search(m["content"]):
+            snippet = m["content"][:80].replace("\n", " ")
+            active += (
+                f"\n\n⚠️ PEER CLAIM ACTIVE: {m['agent_name']} just claimed \"{snippet}\"."
+                f" PASS unless you have a clearly different, non-overlapping deliverable."
+            )
+            break
     if mentioned_me:
         if operator_directive or was_delegated_to_me(external):
             active += (
@@ -746,7 +805,10 @@ def main() -> None:
         mentioned_other = (
             not mentioned_me and
             any(
-                m["content"].strip().startswith("@") and f"@{AGENT_NAME}" not in m["content"]
+                (
+                    m["content"].strip().startswith("@") or
+                    _COLON_ADDRESS_RE.match(m["content"].strip())
+                ) and f"@{AGENT_NAME}" not in m["content"]
                 for m in external
             )
         )
@@ -761,8 +823,10 @@ def main() -> None:
         op_cmd = latest_operator_command(external)
         operator_directive = operator_directive_pending(external)
 
-        # Operator/grader directives skip stagger delay — highest priority (Del 3 smart participation).
-        if operator_directive:
+        # Operator/grader directives skip stagger delay — UNLESS they ask agents to
+        # coordinate/distribute roles first (racing causes duplicate files).
+        _is_coordination = operator_directive and _COORDINATION_RE.search(op_cmd or "")
+        if operator_directive and not _is_coordination:
             log.info("operator directive — skipping response delay")
             external = _merge_rechecked_messages(state, external, log)
             op_cmd = latest_operator_command(external)
@@ -776,6 +840,12 @@ def main() -> None:
             operator_directive = operator_directive_pending(external)
             if operator_directive:
                 log.info("operator directive detected after recheck — applying priority")
+
+        # Operator silence commands ("cease and desist", "be quiet", etc.) — PASS immediately.
+        if op_cmd and _SILENCE_DIRECTIVE_RE.search(op_cmd):
+            log.info("PASS — silence directive from operator")
+            time.sleep(POLL_INTERVAL)
+            continue
 
         delegated = was_delegated_to_me(external)
         active_prompt = build_active_prompt(
@@ -794,6 +864,18 @@ def main() -> None:
         # this turn. Cleared when no operator imperative is active so we don't
         # block routine cleanup of unrelated files.
         ag.set_protected_files(extract_required_filenames(op_cmd) if op_cmd else [])
+
+        # Skip LLM entirely when all new messages are purely social and there is
+        # no operator directive. Prevents the agent from hallucinating tasks from greetings.
+        if not operator_directive and not mentioned_me:
+            all_social = all(
+                _SOCIAL_ONLY_RE.match(m["content"].strip())
+                for m in external
+            )
+            if all_social:
+                log.info("PASS — all-social messages, skipping LLM call")
+                time.sleep(POLL_INTERVAL)
+                continue
 
         log.info("→ calling LLM (history=%d entries)", len(history))
         reply = ag.decide(external, AGENT_NAME, active_prompt, history, token_counter)
@@ -849,16 +931,10 @@ def main() -> None:
             reply, external, active_prompt, history, token_counter, soft_limit, log,
         )
 
-        # For unaddressed tasks: nudge once to prevent total silence.
-        # Skip nudge for short social messages (greetings etc.) — not SWE tasks.
-        # Also skipped at soft token limit.
-        combined_text = " ".join(m["content"] for m in external)
-        looks_like_swe = any(w in combined_text.lower() for w in (
-            "build", "create", "write", "implement", "add", "fix", "test",
-            "code", "file", "function", "class", "api", "app", "script",
-            "bug", "error", "run", "deploy", "docker", "install", "refactor",
-        ))
-        if reply == "PASS" and not mentioned_me and looks_like_swe and not soft_limit:
+        # For unaddressed tasks: nudge once to prevent total silence when the operator
+        # gave a directive that is still active. Without an operator directive the LLM's
+        # PASS is authoritative — don't invent work from peer discussions.
+        if reply == "PASS" and not mentioned_me and operator_directive and not soft_limit:
             log.info("unaddressed task PASS — retrying with workspace-aware nudge")
             try:
                 ws_files = subprocess.run(
@@ -895,9 +971,8 @@ def main() -> None:
             time.sleep(POLL_INTERVAL)
             continue
 
-        # Truncate to hub max
-        if len(reply) > 4096:
-            reply = reply[:4090] + "\n…"
+        # Split long messages instead of truncating (hub cap is 4096 server-side)
+        chunks = split_for_hub(reply)
 
         # Suppress repeated auto-summary fallbacks from THIS agent within 60s.
         # Haiku hits MAX_ROUNDS frequently → identical-shape `[auto-summary]`
@@ -936,10 +1011,21 @@ def main() -> None:
             pass
 
         try:
-            hub.send_message(AGENT_NAME, reply)
-            state.messages_sent += 1
-            log.info("SENT (%d/%d): %s", state.messages_sent, state.msg_cap, reply[:120])
-            time.sleep(POLL_INTERVAL * 2)  # extra cooldown — let team see our message
+            for i, chunk in enumerate(chunks):
+                if state.messages_sent >= state.msg_cap:
+                    log.warning("msg_cap reached mid-split — dropping %d chunk(s)", len(chunks) - i)
+                    break
+                hub.send_message(AGENT_NAME, chunk)
+                state.messages_sent += 1
+                log.info(
+                    "SENT (%d/%d)%s: %s",
+                    state.messages_sent, state.msg_cap,
+                    f" chunk {i+1}/{len(chunks)}" if len(chunks) > 1 else "",
+                    chunk[:120],
+                )
+                if i < len(chunks) - 1:
+                    time.sleep(POLL_INTERVAL)
+            time.sleep(POLL_INTERVAL * 2)  # cooldown after full send
             continue
         except hub.RateLimitError as e:
             log.warning("rate-limited: %s", e)

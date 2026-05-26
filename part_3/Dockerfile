@@ -12,4 +12,4 @@ RUN mkdir -p workspace logs
 # Unbuffered output so logs stream immediately
 ENV PYTHONUNBUFFERED=1
 
-CMD ["python", "main.py"]
+CMD find /app/workspace -mindepth 1 ! -name '.gitkeep' -delete && python main.py

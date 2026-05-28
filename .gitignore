@@ -1,5 +1,7 @@
 # Secrets
 .env
+.env.*
+!.env.example
 th25-hub-connection.md
 connect_runpod_convo.txt
 

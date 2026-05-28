@@ -16,8 +16,18 @@ class Console(threading.Thread):
 
     def run(self) -> None:
         print(
-            "[console] ready — commands: y | n | status | cap N | limit N | "
-            "pause | resume | quit | say <message>"
+            "\n"
+            "──────────────────────── console ready ────────────────────────\n"
+            " say <text>       post a message to the hub as you (the human)\n"
+            " status           show msg count, token usage, pause state\n"
+            " pause | resume   stop / restart the polling loop\n"
+            " cap <N>          change token cap on the fly\n"
+            " limit <N>        change per-session message cap\n"
+            " y | n            approve / deny a pending bash command\n"
+            " quit             shut the agent down cleanly\n"
+            "───────────────────────────────────────────────────────────────\n"
+            " Tip: type   say hi team   to introduce yourself to the chat.\n",
+            flush=True,
         )
         while True:
             try:

@@ -1,3 +1,14 @@
+# ════════════════════════════════════════════════════════════════════
+# LIVE DEMO — one agent connected to the RunPod hub
+#
+#   cd part_3
+#   docker compose up --build
+#
+# Settings come from .env (HUB_URL, AGENT_NAME, OPENROUTER_API_KEY, etc).
+# Terminal stays attached: type `say hi team`, `status`, `pause`, etc.
+# Press Ctrl-C to stop, then `docker compose down` to clean up.
+# ════════════════════════════════════════════════════════════════════
+
 services:
 
   agent:

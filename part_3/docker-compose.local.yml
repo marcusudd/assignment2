@@ -1,0 +1,111 @@
+# ════════════════════════════════════════════════════════════════════
+# LOCAL DEMO — mock hub + web UI + three identical agents
+#
+#   cd part_3
+#   docker compose -f docker-compose.local.yml up --build
+#
+# After it boots:
+#   • Open  http://localhost:8080  to see the chat UI and post as a human
+#   • Watch the mixed agent logs in the terminal
+#   • To talk to ONE agent via the console (say / status / pause / etc):
+#       docker attach part_3-agent1-1
+#     (detach with Ctrl-P Ctrl-Q — do NOT use Ctrl-C, it kills the agent)
+#
+# Press Ctrl-C in the compose terminal to stop everything, then:
+#   docker compose -f docker-compose.local.yml down
+# ════════════════════════════════════════════════════════════════════
+
+services:
+
+  hub:
+    build: .
+    command: python frontend_demo/mock_hub.py
+    environment:
+      HUB_HOST: "0.0.0.0"
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/stats?password=th25-agents-vg', timeout=2)"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+      start_period: 2s
+
+  agent1:
+    build: .
+    environment:
+      AGENT_NAME: "marcus-local-1"
+      HUB_URL: "http://hub:8080"
+      HUB_PASSWORD: "th25-agents-vg"
+      DRY_RUN: "false"
+      RESPONSE_DELAY: "2"
+      MSG_CAP: "10"
+      TOKEN_CAP: "300000"
+      POLL_INTERVAL: "3"
+      AUTO_APPROVE: "true"
+      MAX_ROUNDS: "10"
+      MAX_OUTPUT: "5000"
+      WORKSPACE_DIR: "./workspace"
+      DEBUG: "false"
+    env_file:
+      - .env.local
+    volumes:
+      - ./workspace:/app/workspace
+      - ./logs:/app/logs
+    depends_on:
+      hub:
+        condition: service_healthy
+    # Kept on a tty so `docker attach part_3-agent1-1` works for the
+    # interactive console (say / status / pause / quit / y / n).
+    stdin_open: true
+    tty: true
+
+  agent2:
+    build: .
+    environment:
+      AGENT_NAME: "marcus-local-2"
+      HUB_URL: "http://hub:8080"
+      HUB_PASSWORD: "th25-agents-vg"
+      DRY_RUN: "false"
+      RESPONSE_DELAY: "5"
+      MSG_CAP: "10"
+      TOKEN_CAP: "300000"
+      POLL_INTERVAL: "3"
+      AUTO_APPROVE: "true"
+      MAX_ROUNDS: "10"
+      MAX_OUTPUT: "5000"
+      WORKSPACE_DIR: "./workspace"
+      DEBUG: "false"
+    env_file:
+      - .env.local
+    volumes:
+      - ./workspace:/app/workspace
+      - ./logs:/app/logs
+    depends_on:
+      hub:
+        condition: service_healthy
+
+  agent3:
+    build: .
+    environment:
+      AGENT_NAME: "marcus-local-3"
+      HUB_URL: "http://hub:8080"
+      HUB_PASSWORD: "th25-agents-vg"
+      DRY_RUN: "false"
+      RESPONSE_DELAY: "8"
+      MSG_CAP: "10"
+      TOKEN_CAP: "300000"
+      POLL_INTERVAL: "3"
+      AUTO_APPROVE: "true"
+      MAX_ROUNDS: "10"
+      MAX_OUTPUT: "5000"
+      WORKSPACE_DIR: "./workspace"
+      DEBUG: "false"
+    env_file:
+      - .env.local
+    volumes:
+      - ./workspace:/app/workspace
+      - ./logs:/app/logs
+    depends_on:
+      hub:
+        condition: service_healthy

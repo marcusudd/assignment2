@@ -315,27 +315,36 @@ def hub_reply_blocked(reply: str) -> bool:
 
 
 def split_for_hub(reply: str, max_len: int = 4090) -> list[str]:
-    """Split reply into chunks ≤ max_len at code-block or newline boundaries."""
-    if len(reply) <= max_len:
-        return [reply]
+    """Split reply into hub messages ≤ max_len.
+
+    First splits on ag.HUB_MSG_BREAK boundaries (used by format_code_transfer
+    when packing a multi-part code paste into a single reply string), then
+    chunks any over-length piece at code-block or newline boundaries.
+    """
+    pieces = [p for p in reply.split(ag.HUB_MSG_BREAK) if p.strip()]
     chunks: list[str] = []
-    rest = reply
-    while len(rest) > max_len:
-        fence = rest.rfind("```", 0, max_len)
-        if fence > 50:
-            cut = fence + 3
-            if cut < len(rest) and rest[cut] == "\n":
-                cut += 1
-        else:
-            cut = rest.rfind("\n", 0, max_len - 10)
-            if cut < 0:
-                cut = max_len - 10
-        chunks.append(rest[:cut].rstrip())
-        rest = rest[cut:].lstrip("\n")
+    for piece in pieces:
+        piece = piece.strip()
+        if len(piece) <= max_len:
+            chunks.append(piece)
+            continue
+        rest = piece
+        while len(rest) > max_len:
+            fence = rest.rfind("```", 0, max_len)
+            if fence > 50:
+                cut = fence + 3
+                if cut < len(rest) and rest[cut] == "\n":
+                    cut += 1
+            else:
+                cut = rest.rfind("\n", 0, max_len - 10)
+                if cut < 0:
+                    cut = max_len - 10
+            chunks.append(rest[:cut].rstrip())
+            rest = rest[cut:].lstrip("\n")
+            if rest:
+                rest = "(cont.) " + rest
         if rest:
-            rest = "(cont.) " + rest
-    if rest:
-        chunks.append(rest)
+            chunks.append(rest)
     return chunks
 
 
@@ -478,9 +487,71 @@ _DELEGATION_HINT_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Component nouns that commonly appear at the end of a feature phrase
+# ("question bank", "game loop", "scoring system"). Used to infer filenames
+# from prose directives that don't name files explicitly.
+_COMPONENT_SUFFIXES = frozenset({
+    "bank", "system", "loop", "engine", "manager", "parser", "handler",
+    "controller", "service", "client", "server", "registry", "store",
+    "runner", "tracker", "validator", "formatter", "scheduler",
+    "queue", "cache", "router", "dispatcher",
+})
+
+# Filler words stripped from prose component phrases before snake_casing.
+_PROSE_STOP_WORDS = frozenset({
+    "the", "a", "an", "this", "that", "these", "those",
+    "our", "your", "my", "their", "and", "or", "to", "for",
+    "we", "i", "need", "needs", "have", "build", "create",
+    "implement", "make", "add", "with", "please",
+})
+
+
+def _extract_prose_components(text: str) -> list[str]:
+    """Infer filenames from prose component phrases.
+
+    'we need: question bank, scoring system, and game loop'
+        -> ['question_bank.py', 'scoring_system.py', 'game_loop.py']
+
+    Splits the directive on commas/semicolons/`and`/`or`, looks for a known
+    component suffix in each chunk, and joins it with 1-2 preceding non-stop
+    tokens as the qualifier.
+    """
+    chunks = re.split(r"[,;\n]| and | or ", text, flags=re.IGNORECASE)
+    seen: set[str] = set()
+    out: list[str] = []
+    for chunk in chunks:
+        words = re.findall(r"[a-z]+", chunk.lower())
+        if not words:
+            continue
+        for i in range(len(words) - 1, -1, -1):
+            if words[i] not in _COMPONENT_SUFFIXES:
+                continue
+            qualifiers: list[str] = []
+            for j in range(i - 1, -1, -1):
+                if words[j] in _PROSE_STOP_WORDS:
+                    if qualifiers:
+                        break
+                    continue
+                qualifiers.insert(0, words[j])
+                if len(qualifiers) >= 2:
+                    break
+            if not qualifiers:
+                break
+            name = "_".join(qualifiers + [words[i]]) + ".py"
+            if name not in seen:
+                seen.add(name)
+                out.append(name)
+            break  # one component per chunk
+    return out
+
 
 def extract_required_filenames(operator_text: str | None) -> list[str]:
-    """Filenames mentioned in an operator directive (multi-file tasks)."""
+    """Filenames mentioned in an operator directive (multi-file tasks).
+
+    Layer 1: explicit filenames with extension (`app.py`, db.py).
+    Layer 2 (fallback): prose component phrases — only when Layer 1 found
+    nothing, since an operator that names files directly is authoritative.
+    """
     if not operator_text:
         return []
     seen: set[str] = set()
@@ -488,6 +559,12 @@ def extract_required_filenames(operator_text: str | None) -> list[str]:
     for m in _NAMED_FILE_RE.finditer(operator_text):
         name = (m.group(1) or m.group(2) or "").strip()
         if name and name not in seen and name != ".gitkeep":
+            seen.add(name)
+            out.append(name)
+    if out:
+        return out
+    for name in _extract_prose_components(operator_text):
+        if name not in seen:
             seen.add(name)
             out.append(name)
     return out
@@ -691,8 +768,14 @@ def auto_save_peer_code(
                     )
                     received = state.split_transfer_buffer[fname]
                     if len(received) == part_total:
+                        # Strip trailing newlines that fenced-block capture
+                        # picks up before the closing ```, then re-join with
+                        # \n so the reconstruction matches the original file
+                        # whether the sender used standard or non-standard
+                        # markdown fence-closing.
                         full_code = "\n".join(
-                            received[i] for i in sorted(received.keys())
+                            received[i].rstrip("\n")
+                            for i in sorted(received.keys())
                         )
                         target = root / fname
                         target.parent.mkdir(parents=True, exist_ok=True)
@@ -1405,13 +1488,8 @@ def main() -> None:
                 fpath = Path(ag.WORKSPACE_DIR) / fname
                 if fpath.exists():
                     content = fpath.read_text(encoding="utf-8", errors="replace")
-                    if len(content) <= 3500:
-                        body, note = content, ""
-                    else:
-                        body = content[:3500]
-                        note = f"\n(truncated — {len(content)} chars total, full file on workspace)"
                     lang = ag._LANG_BY_EXT.get(fpath.suffix.lstrip("."), "")
-                    reply = f"Klar med: `{fname}`\n```{lang}\n{body}\n```{note}"
+                    reply = ag.format_code_transfer(fname, content, lang)
                     log.info("CODE TRANSFER fallback — pasting `%s` programmatically", fname)
 
         # Safety net: if files were written this turn but aren't yet in the reply as
@@ -1428,10 +1506,8 @@ def main() -> None:
                     if not fpath.exists():
                         continue
                     content = fpath.read_text(encoding="utf-8", errors="replace")
-                    body = content[:3500]
-                    note = f"\n(truncated — {len(content)} chars total)" if len(content) > 3500 else ""
                     lang = ag._LANG_BY_EXT.get(fpath.suffix.lstrip("."), "")
-                    reply = reply + f"\nKlar med: `{fname}`\n```{lang}\n{body}\n```{note}"
+                    reply = reply + ag.HUB_MSG_BREAK + ag.format_code_transfer(fname, content, lang)
                     log.info("CODE TRANSFER appended (safety net) — added `%s`", fname)
 
         # For unaddressed tasks: nudge once to prevent total silence when the operator

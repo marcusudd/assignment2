@@ -372,12 +372,7 @@ def decide(
                 continue
             ext = fname.rsplit(".", 1)[-1].lower() if "." in fname else ""
             lang = _LANG_BY_EXT.get(ext, "")
-            body = content[:3500]
-            note = (
-                f"\n(truncated — {len(content)} chars total, full file on workspace)"
-                if len(content) > 3500 else ""
-            )
-            result = result + f"\nKlar med: `{fname}`\n```{lang}\n{body}\n```{note}"
+            result = result + HUB_MSG_BREAK + format_code_transfer(fname, content, lang)
         return result
 
     for _ in range(rounds_cap):
@@ -513,6 +508,73 @@ _LANG_BY_EXT = {
     "yaml": "yaml", "yml": "yaml", "html": "html", "css": "css", "toml": "toml",
 }
 
+# Sentinel separating distinct hub messages packed into a single reply string.
+# split_for_hub in main.py splits on this first, then re-chunks any remainder.
+HUB_MSG_BREAK = "\n<<<HUB_MSG_BREAK>>>\n"
+
+# Hub server caps each message at 4096 chars; reserve slack for headers/fences.
+_HUB_MSG_MAX = 4090
+
+
+def format_code_transfer(
+    fname: str, content: str, lang: str = "", header_prefix: str = "Klar med",
+) -> str:
+    """Render a file as one or more CODE TRANSFER hub messages.
+
+    Small files → one message. Larger files → N messages tagged `(part k/N)`
+    that the receiver in main.py:auto_save_peer_code reassembles. Multiple
+    messages are joined by HUB_MSG_BREAK so the send loop can split them
+    back into discrete hub.send_message calls.
+
+    Body content is split at newline boundaries — never mid-line — so each
+    part is a syntactically complete chunk of the original file.
+    """
+    single = f"{header_prefix}: `{fname}`\n```{lang}\n{content}\n```"
+    if len(single) <= _HUB_MSG_MAX:
+        return single
+
+    # Worst-case header (assume part numbers up to 99).
+    sample_header_first = f"{header_prefix}: `{fname}` (part 99/99)\n```{lang}\n"
+    sample_header_rest = f"(part 99/99) `{fname}`\n```{lang}\n"
+    sample_footer = "\n```"
+    header_budget = max(len(sample_header_first), len(sample_header_rest))
+    body_max = _HUB_MSG_MAX - header_budget - len(sample_footer)
+    if body_max < 200:
+        body_max = 200  # defensive: very long filenames shouldn't collapse the body
+
+    # Pack lines greedily into parts; if any single line exceeds body_max,
+    # hard-cut it (rare for code, accepted as edge case).
+    lines = content.split("\n")
+    parts: list[str] = []
+    cur: list[str] = []
+    cur_len = 0
+    for line in lines:
+        line_len = len(line) + 1  # +1 for the "\n" rejoin cost
+        if line_len > body_max:
+            if cur:
+                parts.append("\n".join(cur))
+                cur, cur_len = [], 0
+            for i in range(0, len(line), body_max):
+                parts.append(line[i:i + body_max])
+            continue
+        if cur_len + line_len > body_max and cur:
+            parts.append("\n".join(cur))
+            cur, cur_len = [], 0
+        cur.append(line)
+        cur_len += line_len
+    if cur:
+        parts.append("\n".join(cur))
+
+    n = len(parts)
+    messages: list[str] = []
+    for i, body in enumerate(parts, start=1):
+        if i == 1:
+            header = f"{header_prefix}: `{fname}` (part {i}/{n})"
+        else:
+            header = f"(part {i}/{n}) `{fname}`"
+        messages.append(f"{header}\n```{lang}\n{body}\n```")
+    return HUB_MSG_BREAK.join(messages)
+
 
 def _extract_written_file(command: str) -> str | None:
     """Return filename from a bash command that creates/modifies a file.
@@ -550,12 +612,7 @@ def _build_autosummary(
         return "PASS"
     ext = target.rsplit(".", 1)[-1].lower() if "." in target else ""
     lang = _LANG_BY_EXT.get(ext, "")
-    if len(content) <= 3500:
-        body, note = content, ""
-    else:
-        body = content[:3500]
-        note = f"\n(truncated — {len(content)} chars total, full file on workspace)"
-    return f"Klar med: `{target}`\n```{lang}\n{body}\n```{note}"
+    return format_code_transfer(target, content, lang)
 
 
 

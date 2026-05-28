@@ -669,6 +669,29 @@ class TestWorkspaceGap:
         assert "models.py" in names
         assert "project_cli.py" in names
 
+    def test_extract_filenames_from_prose_components(self):
+        # The Igor live-session case — pure prose, no .py suffixes.
+        text = (
+            "all agents, let's build a multiplayer quiz game in Python together. "
+            "We need: question bank, scoring system, and game loop"
+        )
+        names = main.extract_required_filenames(text)
+        assert "question_bank.py" in names
+        assert "scoring_system.py" in names
+        assert "game_loop.py" in names
+
+    def test_explicit_filenames_skip_prose_fallback(self):
+        # If operator names files explicitly, prose components are ignored.
+        text = "Build app.py — the question bank handles input"
+        names = main.extract_required_filenames(text)
+        assert names == ["app.py"]
+
+    def test_prose_fallback_strips_stop_words(self):
+        text = "Please build the game loop for our project"
+        names = main.extract_required_filenames(text)
+        assert "game_loop.py" in names
+        assert all(not n.startswith(("the_", "our_", "please_")) for n in names)
+
     def test_gap_section_lists_missing(self, tmp_path):
         (tmp_path / "models.py").write_text("# m\n")
         op = "Build app.py, models.py, db.py for the API"
@@ -992,6 +1015,142 @@ class TestSplitForHub:
         big = "```python\n" + ("y = 2\n" * 200) + "```\n" + ("z = 3\n" * 200)
         for chunk in main.split_for_hub(big):
             assert len(chunk) <= 4090
+
+    def test_respects_hub_msg_break_boundary(self):
+        # HUB_MSG_BREAK marks distinct hub messages — splitter must honor it
+        a = "first message"
+        b = "second message"
+        combined = a + agent.HUB_MSG_BREAK + b
+        assert main.split_for_hub(combined) == [a, b]
+
+    def test_empty_pieces_filtered(self):
+        # Leading or trailing breaks shouldn't produce empty hub messages
+        msg = agent.HUB_MSG_BREAK + "only content" + agent.HUB_MSG_BREAK
+        assert main.split_for_hub(msg) == ["only content"]
+
+
+class TestFormatCodeTransfer:
+    def test_small_file_single_message(self):
+        out = agent.format_code_transfer("hello.py", "print('hi')\n", "python")
+        assert agent.HUB_MSG_BREAK not in out
+        assert "Klar med: `hello.py`" in out
+        assert "(part" not in out
+        assert "```python" in out
+        assert "print('hi')" in out
+
+    def test_large_file_produces_multi_part(self):
+        content = "\n".join(f"line {i:04d}: " + "x" * 60 for i in range(120))
+        out = agent.format_code_transfer("big.py", content, "python")
+        parts = out.split(agent.HUB_MSG_BREAK)
+        assert len(parts) >= 2
+        # First part carries the Klar med header + (part 1/N)
+        assert parts[0].startswith("Klar med: `big.py` (part 1/")
+        # Subsequent parts use the rest-header form
+        for i, p in enumerate(parts[1:], start=2):
+            assert p.startswith(f"(part {i}/{len(parts)}) `big.py`")
+        # Every hub message stays under the hub cap
+        for p in parts:
+            assert len(p) <= 4090
+
+    def test_each_part_has_closed_fence(self):
+        content = "\n".join(f"row {i}: data" for i in range(900))
+        parts = agent.format_code_transfer("data.py", content, "python").split(
+            agent.HUB_MSG_BREAK
+        )
+        assert len(parts) >= 2
+        for p in parts:
+            assert p.count("```") == 2  # opening + closing fence per chunk
+
+    def test_long_single_line_falls_back_to_hard_cut(self):
+        # No newlines anywhere — helper must still produce chunks under cap
+        blob = "x" + "y" * 6000
+        parts = agent.format_code_transfer("blob.js", blob, "javascript").split(
+            agent.HUB_MSG_BREAK
+        )
+        assert len(parts) >= 2
+        for p in parts:
+            assert len(p) <= 4090
+
+    def test_no_truncated_marker_emitted(self):
+        # Regression: the old behavior added "(truncated — N chars total)"
+        # which peers correctly flagged as incomplete. New behavior splits
+        # instead, so the marker should never appear in helper output.
+        content = "x = 1\n" * 2000
+        out = agent.format_code_transfer("verbose.py", content, "python")
+        assert "truncated" not in out.lower()
+
+
+class TestCodeTransferRoundTrip:
+    """End-to-end: format → split_for_hub → auto_save_peer_code → file matches."""
+
+    @staticmethod
+    def _roundtrip(tmp_path, fname, content, lang):
+        msg = agent.format_code_transfer(fname, content, lang)
+        chunks = main.split_for_hub(msg)
+        state = AgentState(msg_cap=10, token_counter=TokenCounter(cap=10_000))
+        import logging
+        peer_msgs = [
+            {"agent_name": "peer", "content": c, "seq": i}
+            for i, c in enumerate(chunks, 1)
+        ]
+        main.auto_save_peer_code(
+            peer_msgs, str(tmp_path), logging.getLogger("rt"), state=state,
+        )
+        return (tmp_path / fname).read_text(encoding="utf-8"), chunks
+
+    def test_single_message_roundtrip(self, tmp_path):
+        content = "def hello():\n    return 'world'\n"
+        recon, chunks = self._roundtrip(tmp_path, "hello.py", content, "python")
+        assert len(chunks) == 1
+        assert recon.rstrip("\n") == content.rstrip("\n")
+
+    def test_multi_part_roundtrip_matches_original(self, tmp_path):
+        content = "\n".join(
+            f"# line {i:04d} — descriptive text about the implementation"
+            for i in range(120)
+        )
+        recon, chunks = self._roundtrip(tmp_path, "backend/main.py", content, "python")
+        assert len(chunks) >= 2
+        assert recon.rstrip("\n") == content.rstrip("\n")
+
+    def test_three_part_roundtrip(self, tmp_path):
+        content = "\n".join(f"row {i}: " + "x" * 60 for i in range(250))
+        recon, chunks = self._roundtrip(tmp_path, "rows.py", content, "python")
+        assert len(chunks) >= 3
+        assert recon.rstrip("\n") == content.rstrip("\n")
+
+    def test_blank_lines_preserved(self, tmp_path):
+        # Intentional blank lines between functions must survive reassembly
+        content = (
+            "def a():\n    pass\n\n\n"
+            "def b():\n    pass\n\n\n"
+            "def c():\n" + ("    print('x')\n" * 400)
+        )
+        recon, chunks = self._roundtrip(tmp_path, "spaced.py", content, "python")
+        assert len(chunks) >= 2
+        # Triple-newline runs preserved exactly
+        assert recon.count("\n\n\n") == content.count("\n\n\n")
+        assert recon.rstrip("\n") == content.rstrip("\n")
+
+    def test_partial_delivery_marks_incomplete(self, tmp_path):
+        # Receiver should not write a file until all parts have arrived
+        content = "\n".join(f"line {i}: data" for i in range(900))
+        chunks = main.split_for_hub(
+            agent.format_code_transfer("partial.py", content, "python")
+        )
+        assert len(chunks) >= 2
+        state = AgentState(msg_cap=10, token_counter=TokenCounter(cap=10_000))
+        import logging
+        # Deliver everything EXCEPT the last part
+        partial = [
+            {"agent_name": "peer", "content": c, "seq": i}
+            for i, c in enumerate(chunks[:-1], 1)
+        ]
+        main.auto_save_peer_code(
+            partial, str(tmp_path), logging.getLogger("partial"), state=state,
+        )
+        assert not (tmp_path / "partial.py").exists()
+        assert "incomplete split" in state.peer_file_issues.get("partial.py", "")
 
 
 class TestColonAddressRouting:

@@ -7,7 +7,6 @@ import datetime
 import os
 import re
 import subprocess
-import sys
 import time
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -34,6 +33,8 @@ _DUP_ACTIONS = ("created", "verified", "added", "updated", "wrote", "implemented
 _IMPERATIVES = (
     "build", "create", "delete", "remove", "fix", "implement", "write",
     "add", "make", "update", "refactor", "rewrite", "clean", "rebuild",
+    "raise", "confirm", "acknowledge", "respond", "introduce", "show", "state",
+    "skapa", "bygg", "skriv", "lägg", "fixa", "radera", "uppdatera", "gör",
 )
 _OPERATOR_ALIASES = frozenset({
     "humanoperator", "operator", "human", "graderbot", "grader",
@@ -52,31 +53,77 @@ _PROMISE_RE = re.compile(
 )
 _DELIVERY_RE = re.compile(
     r"\b(created|wrote|added|edited|updated|removed|fixed|implemented|"
-    r"installed|deleted|verified|ran|tested|built)\b",
-    re.IGNORECASE,
+    r"installed|deleted|verified|ran|tested|built|"
+    r"reviewed|noted|flagged|approved|rejected|confirmed|"
+    r"skapade|skapat|skrev|lade|byggde|byggt|gjorde|gjort|"
+    r"implementerade|raderade|raderat|uppdaterade|fixade|"
+    r"fyllt|fyllde|installerade|verifierade|körde|testade|"
+    r"granskade|granskat|noterade|noterat|flaggade|flaggat|godkände|godkänt)\b"
+    r"|^(?:Review|Granskning|Critic note|Critic):",
+    re.IGNORECASE | re.MULTILINE,
 )
 _IMPERATIVE_RE = re.compile(
     r"\b(" + "|".join(re.escape(w) for w in _IMPERATIVES) + r")\b",
     re.IGNORECASE,
 )
-_MENTION_ME_RE = re.compile(rf"@{re.escape(AGENT_NAME)}\b")
+_MENTION_ME_RE = re.compile(rf"\b{re.escape(AGENT_NAME)}\b", re.IGNORECASE)
 _COLON_ADDRESS_RE = re.compile(r"^[\w][\w]*-[\w-]+\s*:", re.IGNORECASE)
+_BROADCAST_ADDRESS_RE = re.compile(
+    r"^@(everyone|all|agents|alla(\s+agenter)?)\b",
+    re.IGNORECASE,
+)
+# Broadcast operator commands ("all agents, build X" / "@everyone build X") imply
+# multiple agents will race — keep the response delay so peers can claim roles first.
+_BROADCAST_OPERATOR_RE = re.compile(
+    r"^(@(everyone|all|agents|alla(\s+agenter)?)\b|all\s+agents\b|alla\s+agenter\b)",
+    re.IGNORECASE,
+)
 _COORDINATION_RE = re.compile(
     r"\b(distribute|dela upp|koordinera|coordinate|assign.{0,5}roles?|fördela|"
-    r"split.{0,10}roles?|decide.{0,10}roles?)\b",
+    r"split.{0,10}roles?|decide.{0,10}roles?|together|tillsammans)\b",
+    re.IGNORECASE,
+)
+# Role-distribution patterns — operator describes a multi-role workflow where
+# each agent plays one role. Detection here softens the DELEGATION OVERRIDE
+# (no forced immediate file write) so the LLM can claim a role first.
+_ROLE_DISTRIBUTION_RE = re.compile(
+    r"\b(?:agent\s*\d|act\s+as\s+a?\s*\d+[-\s]?agent|play.{0,30}roles?|"
+    r"the\s+(?:product\s+planner|lead\s+developer|bug\s+tester|"
+    r"final\s+refiner|reviewer|architect|qa|tester)|"
+    r"workflow.{0,30}(?:agents?|roles?)|sequential(?:ly)?.{0,30}roles?)\b",
     re.IGNORECASE,
 )
 # Explicit peer task-claim phrases — if a peer just claimed work, nudge is suppressed.
 _PEER_CLAIM_RE = re.compile(
-    r"\b(jag tar mig an|taking:|i'll handle|confirmed,?\s*taking|bekräftat)\b",
+    r"\b(jag tar mig an|jag tar|taking:|i'?ll handle|i will take|"
+    r"confirmed,?\s*taking|bekräftat)\b",
     re.IGNORECASE,
 )
 # Pure social messages — no SWE task implied.
 _SOCIAL_ONLY_RE = re.compile(
-    r"^(hej[!.]?|hi[!.]?|hello[!.]?|hey[!.]?|tjena[!.]?|hallå[!.]?"
+    r"^("
+    # Greetings
+    r"hej[!.]?|hi[!.]?|hello[!.]?|hey[!.]?|tjena[!.]?|hallå[!.]?"
     r"|good\s+(morning|afternoon|evening)[!.]?"
+    # Online/offline announcements
     r"|[\w-]+\s+is\s+(going\s+)?(offline|online)[.!]?.*"
-    r"|goodbye[!.]?|bye[!.]?)$",
+    # Farewells
+    r"|goodbye[!.]?|bye[!.]?|hej\s+då.*|adjö.*|vi\s+ses.*|farewell.*"
+    r"|[\w-]+\s+säg\s+hej\s+då.*|[\w-]+\s+say\s+goodbye.*"
+    # Vague readiness / "shall we start" questions (no concrete task)
+    r"|okej[.!]?|ok[.!]?|sounds?\s+good[.!?]?|alright[.!?]?"
+    r"|ska\s+vi\s+(sätta\s+igång|börja|köra)[?!.]?.*"
+    r"|tycker\s+ni\s+(att\s+vi\s+ska\s+)?.*"
+    r"|är\s+ni\s+redo[?!.]?.*|är\s+alla\s+redo[?!.]?.*"
+    r"|vilka\s+agenter\s+är\s+beredda.*|who\s+is\s+ready[?!.]?.*"
+    r"|let[''s]*\s+get\s+started[.!?]?|let[''s]*\s+begin[.!?]?"
+    r"|anyone\s+(here|online|ready)[?!.]?.*"
+    # Vague/non-task single words — no operator directive implied
+    r"|testing[!.?]?|test[!.?]?|pokes?[!.?]?|ping[!.?]?"
+    r"|<[^>]{1,60}>"
+    r"|[\w-]+\s+är\s+(online|här|aktiv|redo)[.!?]?"
+    r"|[\w-]+\s+is\s+(here|active|ready)[.!?]?"
+    r")$",
     re.IGNORECASE | re.DOTALL,
 )
 # Operator silence commands — force immediate PASS without calling LLM.
@@ -85,6 +132,43 @@ _SILENCE_DIRECTIVE_RE = re.compile(
     r"tyst|håll\s+käften|var\s+tyst|silence)\b",
     re.IGNORECASE,
 )
+# Detect "Name, ..." / "Name are you here?" addressing patterns at message start.
+# Used to route messages addressed to a SPECIFIC other agent by name (e.g. "emil, ...")
+# rather than to us. Conservative: only match when followed by punctuation or an
+# interrogative/imperative verb so we don't capture random capitalized first words.
+_NAME_ADDRESS_AT_START_RE = re.compile(
+    r"^(?P<name>[\w][\w-]*?)"
+    r"\s*(?:[,?!:]|\s+(?:are|is|can|will|would|could|please|kan|ska|här|here))\b",
+    re.IGNORECASE,
+)
+_MY_NAME_PARTS = frozenset(
+    p for p in AGENT_NAME.lower().split("-") if p and p != "agent"
+)
+_HUMAN_REFS = ("human", "operator", "the human", "the operator")
+
+
+def addressed_to_other_by_name(content: str) -> bool:
+    """True if message opens 'Name, ...' / 'Name are you ...' for a non-self name.
+
+    Conservative: only the exact full agent name (or @<name>) counts as us. Any
+    other first-word name pattern is treated as addressed to someone else.
+    """
+    stripped = content.strip()
+    m = _NAME_ADDRESS_AT_START_RE.match(stripped)
+    if not m:
+        return False
+    name = m.group("name").lower()
+    if name == AGENT_NAME.lower():
+        return False  # full match — addressed to us
+    if name in _MY_NAME_PARTS:
+        # "Marcus Human" / "Marcus operator" → addresses the human, not us
+        rest = stripped[len(m.group(0)):].lstrip().lower()
+        if rest.startswith(_HUMAN_REFS):
+            return True
+        # Plain "Marcus, ..." on a live hub with many marcuses is ambiguous;
+        # be conservative — only the FULL agent name should trigger response.
+        return True
+    return True  # any other first-word name → addressed elsewhere
 _SUCCESS_MARKERS = re.compile(
     r"\b(complete|completed|working|delivered|verified|fully working|"
     r"runs cleanly|full stack|is fully working)\b",
@@ -149,20 +233,6 @@ def latest_imperative_operator_message(messages: list[dict]) -> dict | None:
     return None
 
 
-def should_suppress_autosum(reply: str, last_text: str, age_seconds: float) -> bool:
-    """True if `reply` is a near-duplicate auto-summary recently sent by this agent.
-
-    Suppression rule: reply starts with `[auto-summary]`, a previous auto-summary
-    was sent less than 60s ago, and SequenceMatcher similarity > 0.8.
-    """
-    if not reply.startswith("[auto-summary]"):
-        return False
-    if not last_text or age_seconds >= 60:
-        return False
-    sim = SequenceMatcher(None, reply[:200], last_text[:200]).ratio()
-    return sim > 0.8
-
-
 def has_imperative(text: str | None) -> bool:
     """True if text contains an imperative command verb (whole-word match)."""
     if not text:
@@ -170,14 +240,30 @@ def has_imperative(text: str | None) -> bool:
     return _IMPERATIVE_RE.search(text) is not None
 
 
+_STRUCTURED_DELIVERY_RE = re.compile(
+    r"(?:^[\*\-]\s+\S+.*\n.*?){2,}"  # 2+ consecutive bullet lines
+    r"|^#{1,4}\s+\w+"                # markdown header (# ... ####)
+    r"|\*\*[\w\s]+:\*\*"             # bold label "**X:**"
+    r"|^\d+\.\s+\w+",                # numbered list "1. X"
+    re.MULTILINE,
+)
+
+
 def is_empty_promise(reply: str) -> bool:
-    """True if reply contains future-tense intent without any past-tense delivery."""
+    """True if reply contains future-tense intent without any past-tense delivery.
+
+    Structured content (bullet lists, markdown headers, "**Label:**" patterns)
+    counts as a delivery — a Planner's plan IS the deliverable, even when
+    prefixed with "I will act as the planner. **Feature List:** ...".
+    """
     if not reply or reply == "PASS":
         return False
     if not _PROMISE_RE.search(reply):
         return False
     if _DELIVERY_RE.search(reply):
         return False
+    if _STRUCTURED_DELIVERY_RE.search(reply):
+        return False  # bullet list / header / bold labels = real content
     return True
 
 
@@ -188,7 +274,11 @@ def has_disallowed_promise(reply: str) -> bool:
     create models.py" — is_empty_promise returns False because of "Created", but the
     message still advertises work not done this turn.
     """
-    if not reply or reply == "PASS" or reply.startswith("[auto-summary]"):
+    if not reply or reply == "PASS":
+        return False
+    # Structured content (Planner's plan, bullet/markdown specs) — let it through
+    # even if it contains "I will act as the planner" preamble.
+    if _STRUCTURED_DELIVERY_RE.search(reply):
         return False
     if is_empty_promise(reply):
         return True
@@ -206,7 +296,13 @@ _NON_DELIVERY_RE = re.compile(
 
 def is_non_delivery_reply(reply: str) -> bool:
     """True when the message complains or stalls without showing completed work."""
-    if not reply or reply == "PASS" or reply.startswith("[auto-summary]"):
+    if not reply or reply == "PASS":
+        return False
+    # A formal CODE TRANSFER message ("Klar med: `file`\n```...```") is, by
+    # definition, a delivery. The code itself may legitimately contain "error",
+    # "failed", "issue" etc. as string literals — those must not mark the
+    # message as non-delivery.
+    if re.search(r"(?:klar med|done with)[:\s]+`[\w./-]+`", reply, re.IGNORECASE):
         return False
     if _DELIVERY_RE.search(reply):
         return False
@@ -295,7 +391,7 @@ def claims_file_without_code_block(reply: str) -> str | None:
     the full content so peers can sync their local workspace. Returns the first
     claimed filename when the rule is violated, or None when the message is fine.
     """
-    if not reply or reply == "PASS" or reply.startswith("[auto-summary]"):
+    if not reply or reply == "PASS":
         return None
     if "```" in reply:
         return None
@@ -330,7 +426,7 @@ def _filename_near_codeblock(reply: str, filename: str) -> bool:
 
 def written_files_missing_paste(reply: str, written_files: list[str]) -> str | None:
     """First code file written via tools this turn that lacks a fenced paste in reply."""
-    if not written_files or not reply or reply == "PASS" or reply.startswith("[auto-summary]"):
+    if not written_files or not reply or reply == "PASS":
         return None
     names = [
         Path(f).name
@@ -357,7 +453,7 @@ def claims_nonexistent_file(reply: str, workspace_dir: str) -> str | None:
     and the file does not exist in the workspace. Matched by filename (not path)
     via rglob so files nested in subdirs still count.
     """
-    if not reply or reply == "PASS" or reply.startswith("[auto-summary]"):
+    if not reply or reply == "PASS":
         return None
     names = _iter_claimed_filenames(reply)
     if not names:
@@ -429,21 +525,292 @@ def reply_mentions_missing_required(
     return False
 
 
-def build_workspace_gap_section(op_cmd: str | None, workspace_dir: str) -> str:
-    """Inject missing/existing filenames for large multi-file operator tasks."""
+# Matches "Klar med: `filename`" or "Done with: `filename`" followed by a fenced code block.
+_CODE_TRANSFER_RE = re.compile(
+    r"(?:klar med|done with)[:\s]+`([\w./-]+\.[a-z]{1,5})`"
+    r".*?```[a-z]*\n(.*?)```",
+    re.IGNORECASE | re.DOTALL,
+)
+# Detects "(part N/M)" split-message markers (case-insensitive).
+_SPLIT_PART_RE = re.compile(r"\(\s*part\s+(\d+)\s*/\s*(\d+)\s*\)", re.IGNORECASE)
+# Matches a bare fenced code block (without CODE TRANSFER header).
+_BARE_CODE_BLOCK_RE = re.compile(r"```[a-z]*\n(.*?)```", re.DOTALL | re.IGNORECASE)
+# `# file: name.py` / `// file: name.py` / `# name.py` on FIRST line of a code block.
+_FILE_HINT_RE = re.compile(
+    r"^\s*(?:#|//|--)\s*(?:file\s*[:=]\s*)?([\w./-]+\.[a-z]{1,5})\b",
+    re.IGNORECASE,
+)
+# Catches `# file: X.py` / `// file: X.js` / `<!-- file: X.html -->` ANYWHERE
+# in a message followed by raw code on subsequent lines (no fence). Used when
+# peers dump code as plain text instead of inside a ```fenced``` block.
+_INLINE_FILE_MARKER_RE = re.compile(
+    r"(?:^|\n)\s*(?:#|//|--|<!--)\s*file\s*[:=]\s*([\w./-]+\.[a-z]{1,5})\s*(?:-->)?\s*\n(.+)",
+    re.IGNORECASE | re.DOTALL,
+)
+# `Filer: ...X.html` / `Files: foo.py` — extract filename from operator-style label.
+_FILER_LABEL_RE = re.compile(
+    r"(?:filer?|files?)\s*[:=]\s*[^\n]*?([\w./-]+\.[a-z]{1,5})\b",
+    re.IGNORECASE,
+)
+
+
+def extract_code_transfers(content: str) -> list[tuple[str, str]]:
+    """Return [(filename, code), ...] for every CODE TRANSFER block in a message.
+
+    Detection layers (most specific first):
+    1. "Klar med: `X`" / "Done with: `X`" followed by fenced ```code```
+    2. Fenced ```code``` with `# file: X` hint on first line
+    3. UNFENCED `# file: X.html` line followed by raw code (until end of message)
+    """
+    results: list[tuple[str, str]] = []
+    seen_fnames: set[str] = set()
+    # Layer 1: formal CODE TRANSFER headers
+    for m in _CODE_TRANSFER_RE.finditer(content):
+        fname = m.group(1).strip()
+        code = m.group(2)
+        if fname and code and fname not in seen_fnames:
+            results.append((fname, code))
+            seen_fnames.add(fname)
+    # Layer 2: fenced bare code blocks with `# file: X` hint on first line
+    for m in _BARE_CODE_BLOCK_RE.finditer(content):
+        code = m.group(1)
+        first_line = code.split("\n", 1)[0]
+        hint = _FILE_HINT_RE.match(first_line)
+        if hint:
+            fname = hint.group(1).strip()
+            if fname and fname not in seen_fnames:
+                results.append((fname, code))
+                seen_fnames.add(fname)
+    # Layer 3: UNFENCED `# file: X` marker followed by raw code to end of message.
+    # Used by peers that dump HTML/Python directly without ```fences```.
+    inline_m = _INLINE_FILE_MARKER_RE.search(content)
+    if inline_m:
+        fname = inline_m.group(1).strip()
+        code = inline_m.group(2).strip()
+        if fname and code and fname not in seen_fnames:
+            results.append((fname, code))
+            seen_fnames.add(fname)
+    return results
+
+
+def auto_save_peer_code(
+    messages: list[dict],
+    workspace_dir: str,
+    log,
+    state: "AgentState | None" = None,
+) -> list[str]:
+    """Save code blocks shared by peers to local workspace. Returns saved filenames.
+
+    Also performs lightweight sync validation:
+    - Truncation: messages with "(truncated" marker → file marked incomplete.
+    - Conflict: existing file content differs from peer's → logged with char-diff.
+    - Syntax: Python files run through `py_compile` → failures recorded.
+    Issues are stored on AgentState.peer_file_issues for prompt injection.
+    """
+    saved: list[str] = []
+    root = Path(workspace_dir)
+    for msg in messages:
+        if msg["agent_name"] == AGENT_NAME:
+            continue
+        msg_content = msg["content"]
+        msg_truncated = "(truncated" in msg_content
+        peer_name = msg["agent_name"]
+
+        # Handle SPLIT CODE TRANSFER messages ("(part N/M)") — buffer parts in
+        # state, concatenate when complete. Skips the regular extract path for
+        # subsequent parts (which lack the Klar med: header).
+        split_match = _SPLIT_PART_RE.search(msg_content)
+        if split_match and state is not None:
+            part_n = int(split_match.group(1))
+            part_total = int(split_match.group(2))
+
+            # Extract this part's code chunk. Layers:
+            #   a) fenced bare code block → use its content
+            #   b) inline `# file: X` marker → use everything after that line
+            #   c) raw text after the `(part N/M)` line — strip header lines
+            part_code: str | None = None
+            code_match = _BARE_CODE_BLOCK_RE.search(msg_content)
+            inline_marker = _INLINE_FILE_MARKER_RE.search(msg_content)
+            if code_match:
+                part_code = code_match.group(1)
+            elif inline_marker:
+                part_code = inline_marker.group(2).rstrip()
+            else:
+                # Raw split — drop the "(part N/M)" line and any "Klar med:" line,
+                # treat the rest as code body.
+                lines = msg_content.split("\n")
+                trimmed: list[str] = []
+                skip_phase = True
+                for ln in lines:
+                    if skip_phase and (
+                        _SPLIT_PART_RE.search(ln)
+                        or re.match(r"\s*(?:klar med|done with)\b", ln, re.IGNORECASE)
+                        or not ln.strip()
+                    ):
+                        continue
+                    skip_phase = False
+                    trimmed.append(ln)
+                if trimmed:
+                    part_code = "\n".join(trimmed)
+
+            if part_code:
+                # Resolve filename for this split. Layers:
+                #   a) Klar med: `X` header
+                #   b) inline `# file: X` marker
+                #   c) Filer:/Files: label
+                #   d) lookup recent split from same peer (subsequent parts have no header)
+                fname: str | None = None
+                fname_match = re.search(
+                    r"(?:klar med|done with)[:\s]+`([\w./-]+\.[a-z]{1,5})`",
+                    msg_content, re.IGNORECASE,
+                )
+                if fname_match:
+                    fname = fname_match.group(1)
+                elif inline_marker:
+                    fname = inline_marker.group(1).strip()
+                else:
+                    filer_match = _FILER_LABEL_RE.search(msg_content)
+                    if filer_match:
+                        # Use basename only — peer may say "/workspace/proj/X.html"
+                        fname = filer_match.group(1).split("/")[-1]
+                if not fname:
+                    for buf_fname, meta in state.split_transfer_meta.items():
+                        if meta.get("peer") == peer_name and meta.get("total") == part_total:
+                            fname = buf_fname
+                            break
+                if fname:
+                    state.split_transfer_buffer.setdefault(fname, {})[part_n] = part_code
+                    state.split_transfer_meta[fname] = {
+                        "total": part_total,
+                        "peer": peer_name,
+                        "last_seq": msg.get("seq", 0),
+                    }
+                    log.info(
+                        "buffered split CODE TRANSFER: `%s` part %d/%d from %s (%d chars)",
+                        fname, part_n, part_total, peer_name, len(part_code),
+                    )
+                    received = state.split_transfer_buffer[fname]
+                    if len(received) == part_total:
+                        full_code = "\n".join(
+                            received[i] for i in sorted(received.keys())
+                        )
+                        target = root / fname
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        target.write_text(full_code, encoding="utf-8")
+                        log.info(
+                            "auto-saved `%s` from split (%d parts merged, %d chars)",
+                            fname, part_total, len(full_code),
+                        )
+                        saved.append(fname)
+                        state.peer_file_issues.pop(fname, None)
+                        state.split_transfer_buffer.pop(fname, None)
+                        state.split_transfer_meta.pop(fname, None)
+                    else:
+                        missing = part_total - len(received)
+                        state.peer_file_issues[fname] = (
+                            f"incomplete split: {len(received)}/{part_total} parts received "
+                            f"(missing {missing})"
+                        )
+                    continue  # don't fall through to normal save
+
+        for fname, code in extract_code_transfers(msg_content):
+            target = root / fname
+            target.parent.mkdir(parents=True, exist_ok=True)
+
+            existing: str | None = None
+            if target.is_file():
+                try:
+                    existing = target.read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    existing = None
+            if existing is not None and existing != code:
+                log.info(
+                    "auto-save overwriting `%s` (was %d chars, now %d chars) from %s",
+                    fname, len(existing), len(code), msg["agent_name"],
+                )
+
+            target.write_text(code, encoding="utf-8")
+            log.info("auto-saved `%s` from %s", fname, msg["agent_name"])
+            saved.append(fname)
+
+            if state is None:
+                continue
+
+            if msg_truncated:
+                state.peer_file_issues[fname] = "truncated in chat — incomplete"
+                log.warning("INCOMPLETE code for `%s` from %s (truncated)",
+                            fname, msg["agent_name"])
+            elif fname.endswith(".py"):
+                try:
+                    proc = subprocess.run(
+                        ["python", "-m", "py_compile", fname],
+                        cwd=workspace_dir,
+                        capture_output=True,
+                        text=True,
+                        timeout=5,
+                    )
+                    if proc.returncode != 0:
+                        err = (proc.stderr or proc.stdout or "compile failed").strip()
+                        state.peer_file_issues[fname] = f"syntax: {err[:150]}"
+                        log.warning("SYNTAX ERROR in `%s` from %s: %s",
+                                    fname, msg["agent_name"], err[:200])
+                    elif fname in state.peer_file_issues:
+                        # File previously broken, now compiles — clear the issue.
+                        state.peer_file_issues.pop(fname, None)
+                except (subprocess.TimeoutExpired, OSError) as e:
+                    log.warning("py_compile failed for `%s`: %s", fname, e)
+    return saved
+
+
+def chat_delivered_files(messages: list[dict]) -> dict[str, str]:
+    """Return {filename: agent_name} for files already shared via CODE TRANSFER in chat."""
+    delivered: dict[str, str] = {}
+    for msg in messages:
+        for fname, _ in extract_code_transfers(msg["content"]):
+            if fname not in delivered:
+                delivered[fname] = msg["agent_name"]
+    return delivered
+
+
+def build_workspace_gap_section(
+    op_cmd: str | None,
+    workspace_dir: str,
+    messages: list[dict] | None = None,
+    peer_file_issues: dict[str, str] | None = None,
+) -> str:
+    """Inject missing/existing filenames for large multi-file operator tasks.
+
+    Also lists files already delivered via CODE TRANSFER in chat so the agent
+    does not rebuild what a peer already shared. If peer_file_issues is given,
+    appends a section so the LLM can decide to ask for a repost or rewrite.
+    """
     required = extract_required_filenames(op_cmd)
-    if len(required) < 2:
-        return ""
     present = list_workspace_filenames(workspace_dir)
-    missing = [f for f in required if f not in present]
-    present_named = [f for f in required if f in present]
-    if not missing and not present_named:
-        return ""
+    delivered = chat_delivered_files(messages or [])
+
     lines: list[str] = []
-    if missing:
-        lines.append(f"Missing on disk (pick ONE to create this turn): {', '.join(missing)}")
-    if present_named:
-        lines.append(f"Already on disk: {', '.join(present_named)}")
+
+    if len(required) >= 2:
+        missing = [f for f in required if f not in present]
+        present_named = [f for f in required if f in present]
+        if missing:
+            lines.append(f"Missing on disk (pick ONE to create this turn): {', '.join(missing)}")
+        if present_named:
+            lines.append(f"Already on disk: {', '.join(present_named)}")
+
+    if delivered:
+        parts = [f"`{f}` (by {a})" for f, a in delivered.items()]
+        lines.append(
+            f"Already delivered in chat — do NOT rebuild: {', '.join(parts)}"
+        )
+
+    if peer_file_issues:
+        lines.append("PEER FILES WITH ISSUES — consider asking author to repost or rewrite locally:")
+        for fname, issue in peer_file_issues.items():
+            lines.append(f"  - `{fname}`: {issue}")
+
+    if not lines:
+        return ""
     return "\n\n*** WORKSPACE GAP ***\n" + "\n".join(lines) + "\n"
 
 
@@ -477,11 +844,14 @@ def build_active_prompt(
     operator_directive: bool,
     op_cmd: str | None,
     mentioned_me: bool,
+    peer_file_issues: dict[str, str] | None = None,
 ) -> str:
     active = system_prompt
     if operator_directive and op_cmd:
         active += build_operator_prompt_section(op_cmd)
-        active += build_workspace_gap_section(op_cmd, ag.WORKSPACE_DIR)
+        active += build_workspace_gap_section(
+            op_cmd, ag.WORKSPACE_DIR, external, peer_file_issues=peer_file_issues,
+        )
         active += read_project_status_section(ag.WORKSPACE_DIR)
     # Warn about active peer claims so the LLM doesn't duplicate claimed work.
     for m in external:
@@ -493,12 +863,24 @@ def build_active_prompt(
             )
             break
     if mentioned_me:
+        role_distribution = bool(op_cmd and _ROLE_DISTRIBUTION_RE.search(op_cmd))
         if operator_directive or was_delegated_to_me(external):
-            active += (
-                f"\n\nDELEGATION OVERRIDE: @{AGENT_NAME} was mentioned during an active "
-                f"operator task. Use bash or edit_file THIS turn — deliver ONE file or "
-                f"run ONE verification with quoted output. PASS and 'I will...' are FORBIDDEN."
-            )
+            if role_distribution:
+                active += (
+                    f"\n\nROLE-DISTRIBUTION TASK: @{AGENT_NAME} is one of several agents "
+                    f"asked to play distinct roles. FIRST claim ONE specific role with "
+                    f"`Taking: [role name]` and then PASS this round — let peers claim "
+                    f"the other roles. NEVER write placeholder/stub files. Only build "
+                    f"AFTER you have claimed your role and the assignment is clear."
+                )
+            else:
+                active += (
+                    f"\n\nDELEGATION OVERRIDE: @{AGENT_NAME} was mentioned during an active "
+                    f"operator task. Use bash or edit_file THIS turn — deliver ONE file or "
+                    f"run ONE verification with quoted output. PASS and 'I will...' are FORBIDDEN. "
+                    f"NEVER write a placeholder/stub file (e.g. only comments). If you cannot "
+                    f"deliver functional code this turn, PASS instead."
+                )
         else:
             active += (
                 f"\n\nOVERRIDE: @{AGENT_NAME} was directly mentioned. "
@@ -516,8 +898,14 @@ def apply_send_quality_retries(
     soft_limit: bool,
     log,
     max_retries: int = 2,
+    is_question_response: bool = False,
 ) -> str:
-    """Re-prompt until reply is deliverable (no promises / complaint / missing paste / hallucinated)."""
+    """Re-prompt until reply is deliverable (no promises / complaint / missing paste / hallucinated).
+
+    is_question_response: when True, the non-delivery filter is relaxed. Used
+    when responding to a direct @mention question ("are you here?") where a
+    short status answer is the expected delivery — not buildable code.
+    """
     written_this_turn = ag.get_last_turn_written_files()
     attempts = 0
     while not soft_limit and reply != "PASS" and attempts < max_retries:
@@ -535,7 +923,21 @@ def apply_send_quality_retries(
                 "Your reply contained a PROMISE ('I will...' / 'Next, I'll...'). "
                 "That cannot be sent."
             )
-        elif is_non_delivery_reply(reply):
+        elif (
+            "BLOCKED (absolute path" in reply
+            or "absolute path outside workspace" in reply.lower()
+        ):
+            log.info(
+                "absolute-path complaint — retry %d/%d",
+                attempts + 1,
+                max_retries,
+            )
+            extra = (
+                "You hit an absolute-path BLOCK. The workspace IS your CWD — "
+                "use `cat > file.py <<EOF` NOT `cat > /app/workspace/file.py <<EOF`. "
+                "Retry the same command using ONLY the relative filename now."
+            )
+        elif not is_question_response and is_non_delivery_reply(reply):
             log.info(
                 "non-delivery reply — retry %d/%d",
                 attempts + 1,
@@ -589,7 +991,12 @@ def apply_send_quality_retries(
             f"then resend WITH the full file pasted in a fenced code block. "
             f"If you cannot deliver this turn, reply PASS."
         )
-        reply = ag.decide(external, AGENT_NAME, nudge, history, token_counter)
+        # Retries use a tight rounds cap (3) — they're meant to reformat the
+        # last reply, not do new exploration. Saves significant tokens compared
+        # to giving each retry the full MAX_ROUNDS=10 budget.
+        reply = ag.decide(
+            external, AGENT_NAME, nudge, history, token_counter, max_rounds=3,
+        )
         log.info(
             "← send-quality retry reply: %s",
             reply[:120] if reply != "PASS" else "PASS",
@@ -799,17 +1206,23 @@ def main() -> None:
             time.sleep(POLL_INTERVAL)
             continue
 
+        # Auto-save any code blocks peers shared via CODE TRANSFER.
+        auto_save_peer_code(external, ag.WORKSPACE_DIR, log, state)
+
         # Mention routing: skip only if a message STARTS with @other (primary address).
         # Incidental @mentions mid-message ("great @mini_me2! now let's...") do not block.
         mentioned_me = any(_MENTION_ME_RE.search(m["content"]) for m in external)
         mentioned_other = (
-            not mentioned_me and
-            any(
-                (
-                    m["content"].strip().startswith("@") or
-                    _COLON_ADDRESS_RE.match(m["content"].strip())
-                ) and f"@{AGENT_NAME}" not in m["content"]
-                for m in external
+            not mentioned_me and (
+                any(
+                    (
+                        (m["content"].strip().startswith("@") and
+                         not _BROADCAST_ADDRESS_RE.match(m["content"].strip())) or
+                        _COLON_ADDRESS_RE.match(m["content"].strip())
+                    ) and f"@{AGENT_NAME}" not in m["content"]
+                    for m in external
+                )
+                or any(addressed_to_other_by_name(m["content"]) for m in external)
             )
         )
 
@@ -820,12 +1233,33 @@ def main() -> None:
             time.sleep(POLL_INTERVAL)
             continue
 
-        op_cmd = latest_operator_command(external)
-        operator_directive = operator_directive_pending(external)
+        # Update sticky operator directive if a newer imperative arrived.
+        new_op_msg = latest_imperative_operator_message(external)
+        if new_op_msg and new_op_msg.get("seq", 0) > state.active_op_seq:
+            state.active_op_cmd = new_op_msg["content"]
+            state.active_op_seq = new_op_msg.get("seq", 0)
+            log.info("sticky operator directive updated → seq=%d", state.active_op_seq)
+
+        # Resolve current op_cmd: prefer fresh from this batch, fall back to sticky.
+        op_cmd = latest_operator_command(external) or state.active_op_cmd
+        operator_directive = bool(op_cmd)
+
+        # Clear sticky when peers report success AND required files exist on disk.
+        if state.active_op_cmd and task_completed_heuristic(
+            external, state.active_op_cmd, ag.WORKSPACE_DIR,
+        ):
+            log.info("task completed — clearing sticky operator directive")
+            state.active_op_cmd = None
+            state.active_op_seq = 0
+            op_cmd = None
+            operator_directive = False
 
         # Operator/grader directives skip stagger delay — UNLESS they ask agents to
         # coordinate/distribute roles first (racing causes duplicate files).
-        _is_coordination = operator_directive and _COORDINATION_RE.search(op_cmd or "")
+        _is_coordination = operator_directive and (
+            _COORDINATION_RE.search(op_cmd or "") or
+            _BROADCAST_OPERATOR_RE.match((op_cmd or "").strip())
+        )
         if operator_directive and not _is_coordination:
             log.info("operator directive — skipping response delay")
             external = _merge_rechecked_messages(state, external, log)
@@ -841,6 +1275,18 @@ def main() -> None:
             if operator_directive:
                 log.info("operator directive detected after recheck — applying priority")
 
+        # Circuit breaker — if we just ABORTed 2 times in a row, the LLM is stuck
+        # in a promise/non-delivery loop that's burning tokens. Force PASS for one
+        # round so the situation can evolve (new peer messages, file deliveries).
+        if state.consecutive_aborts >= 2 and not mentioned_me:
+            log.info(
+                "circuit breaker — %d consecutive ABORTs, forcing PASS",
+                state.consecutive_aborts,
+            )
+            state.consecutive_aborts = 0  # reset; let the next turn try fresh
+            time.sleep(POLL_INTERVAL)
+            continue
+
         # Operator silence commands ("cease and desist", "be quiet", etc.) — PASS immediately.
         if op_cmd and _SILENCE_DIRECTIVE_RE.search(op_cmd):
             log.info("PASS — silence directive from operator")
@@ -854,6 +1300,7 @@ def main() -> None:
             operator_directive=operator_directive,
             op_cmd=op_cmd,
             mentioned_me=mentioned_me,
+            peer_file_issues=state.peer_file_issues,
         )
         if mentioned_me:
             log.info("@mentioned — PASS override active")
@@ -879,10 +1326,7 @@ def main() -> None:
 
         log.info("→ calling LLM (history=%d entries)", len(history))
         reply = ag.decide(external, AGENT_NAME, active_prompt, history, token_counter)
-        if reply.startswith("[auto-summary]"):
-            log.info("← LLM reply (auto-fallback): %s", reply[:120])
-        else:
-            log.info("← LLM reply: %s", reply[:120] if reply != "PASS" else "PASS")
+        log.info("← LLM reply: %s", reply[:120] if reply != "PASS" else "PASS")
 
         # If @mentioned but still PASS: retry once with a stronger nudge, then fallback.
         # Skipped at soft limit to conserve tokens — first-pass already ran.
@@ -912,7 +1356,7 @@ def main() -> None:
                     reply[:120] if reply != "PASS" else "PASS",
                 )
             else:
-                canned = "On it! I'll take care of my part now."
+                canned = "Acknowledged."
                 now_ts = time.time()
                 recent_same = (
                     state.last_canned_text == canned
@@ -927,9 +1371,68 @@ def main() -> None:
                     state.last_canned_at = now_ts
                     log.info("fallback reply used (still PASS after retry)")
 
+        # Capture files written THIS turn before retries — apply_send_quality_retries
+        # calls ag.decide() repeatedly and each call resets _last_turn_written_files
+        # to [], so by the time we check after retries the original list is gone.
+        files_written_initial = list(ag.get_last_turn_written_files())
+
+        # Detect Q&A: we're @mentioned AND any new message contains "?". For these
+        # simple status questions, relax the non-delivery filter so a direct answer
+        # like "No, I'm not asleep, I hit X" can pass.
+        is_qa = mentioned_me and any("?" in m["content"] for m in external)
+
         reply = apply_send_quality_retries(
             reply, external, active_prompt, history, token_counter, soft_limit, log,
+            is_question_response=is_qa,
         )
+
+        # Merge files from initial decide() with anything written during retries.
+        def _all_files_written_this_turn() -> list[str]:
+            seen: set[str] = set()
+            merged: list[str] = []
+            for f in files_written_initial + ag.get_last_turn_written_files():
+                if f and f not in seen:
+                    seen.add(f)
+                    merged.append(f)
+            return merged
+
+        # If send-quality retries gave up (PASS) but tools wrote files this turn,
+        # paste the last written file directly — deterministic CODE TRANSFER.
+        if reply == "PASS" and not soft_limit:
+            written_this_turn = _all_files_written_this_turn()
+            if written_this_turn:
+                fname = written_this_turn[-1]
+                fpath = Path(ag.WORKSPACE_DIR) / fname
+                if fpath.exists():
+                    content = fpath.read_text(encoding="utf-8", errors="replace")
+                    if len(content) <= 3500:
+                        body, note = content, ""
+                    else:
+                        body = content[:3500]
+                        note = f"\n(truncated — {len(content)} chars total, full file on workspace)"
+                    lang = ag._LANG_BY_EXT.get(fpath.suffix.lstrip("."), "")
+                    reply = f"Klar med: `{fname}`\n```{lang}\n{body}\n```{note}"
+                    log.info("CODE TRANSFER fallback — pasting `%s` programmatically", fname)
+
+        # Safety net: if files were written this turn but aren't yet in the reply as
+        # a proper code block → append them. agent.py _finish() handles the primary
+        # path; this catches any edge cases that slip through (e.g. retries that
+        # bypass _finish, or files not tracked by bash-redirect pattern).
+        if reply != "PASS":
+            written_this_turn = _all_files_written_this_turn()
+            if written_this_turn:
+                for fname in written_this_turn:
+                    if f"Klar med: `{fname}`" in reply:
+                        continue  # already included
+                    fpath = Path(ag.WORKSPACE_DIR) / fname
+                    if not fpath.exists():
+                        continue
+                    content = fpath.read_text(encoding="utf-8", errors="replace")
+                    body = content[:3500]
+                    note = f"\n(truncated — {len(content)} chars total)" if len(content) > 3500 else ""
+                    lang = ag._LANG_BY_EXT.get(fpath.suffix.lstrip("."), "")
+                    reply = reply + f"\nKlar med: `{fname}`\n```{lang}\n{body}\n```{note}"
+                    log.info("CODE TRANSFER appended (safety net) — added `%s`", fname)
 
         # For unaddressed tasks: nudge once to prevent total silence when the operator
         # gave a directive that is still active. Without an operator directive the LLM's
@@ -948,7 +1451,10 @@ def main() -> None:
             op_cmd = latest_operator_command(external)
             op_section = build_operator_prompt_section(op_cmd) if op_cmd else ""
             gap_section = (
-                build_workspace_gap_section(op_cmd, ag.WORKSPACE_DIR)
+                build_workspace_gap_section(
+                    op_cmd, ag.WORKSPACE_DIR, external,
+                    peer_file_issues=state.peer_file_issues,
+                )
                 if op_cmd else ""
             )
 
@@ -966,27 +1472,23 @@ def main() -> None:
             continue
 
         if hub_reply_blocked(reply):
-            reason = "promises" if has_disallowed_promise(reply) else "non-delivery"
-            log.info("ABORT send — reply blocked (%s)", reason)
-            time.sleep(POLL_INTERVAL)
-            continue
+            # Q&A bypass: non-delivery rule shouldn't block direct answers to
+            # questions. Promise filter still applies — we never want to send
+            # "I will check later" as an answer.
+            if is_qa and not has_disallowed_promise(reply):
+                log.info("Q&A response — bypassing non-delivery filter")
+            else:
+                reason = "promises" if has_disallowed_promise(reply) else "non-delivery"
+                state.consecutive_aborts += 1
+                log.info(
+                    "ABORT send — reply blocked (%s)  consecutive_aborts=%d",
+                    reason, state.consecutive_aborts,
+                )
+                time.sleep(POLL_INTERVAL)
+                continue
 
         # Split long messages instead of truncating (hub cap is 4096 server-side)
         chunks = split_for_hub(reply)
-
-        # Suppress repeated auto-summary fallbacks from THIS agent within 60s.
-        # Haiku hits MAX_ROUNDS frequently → identical-shape `[auto-summary]`
-        # messages would otherwise spam the hub on consecutive cycles.
-        if reply.startswith("[auto-summary]"):
-            now_ts = time.time()
-            age = now_ts - state.last_autosum_at
-            if should_suppress_autosum(reply, state.last_autosum_text, age):
-                log.info("skipping repeat auto-summary (%ds ago) — PASS instead",
-                         int(age))
-                time.sleep(POLL_INTERVAL)
-                continue
-            state.last_autosum_text = reply
-            state.last_autosum_at = now_ts
 
         # Final-check: did anyone — in our existing context OR during our LLM call —
         # already say something near-identical? Compare against both.
@@ -1017,6 +1519,7 @@ def main() -> None:
                     break
                 hub.send_message(AGENT_NAME, chunk)
                 state.messages_sent += 1
+                state.consecutive_aborts = 0  # successful send breaks the abort streak
                 log.info(
                     "SENT (%d/%d)%s: %s",
                     state.messages_sent, state.msg_cap,

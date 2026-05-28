@@ -187,6 +187,13 @@ def resolve_path(rel_path: str) -> Path | None:
 def tool_bash(command: str) -> str:
     reason = security_check(command)
     if reason:
+        if reason == "absolute path outside workspace":
+            return (
+                f"BLOCKED ({reason}). The working directory IS the workspace — "
+                f"use a RELATIVE path. Examples: `cat > app.py <<'EOF'` or "
+                f"`cat > backend/main.py <<'EOF'`. Never prefix with `/app/`, "
+                f"`/app/workspace/`, or any absolute path."
+            )
         return f"BLOCKED ({reason}). Revise the command and try again."
     if AUTO_APPROVE:
         print(f"\n🔧 bash (auto): {command}")
@@ -299,12 +306,15 @@ def decide(
     system_prompt: str,
     history: list,
     token_counter: "TokenCounter",
+    max_rounds: int | None = None,
 ) -> str:
     """
     Given new hub messages, return either 'PASS' or a reply string.
     May call tools before composing the reply.
     Tracks token usage via token_counter.
+    Pass max_rounds to override MAX_ROUNDS (used by retries to limit token cost).
     """
+    rounds_cap = max_rounds if max_rounds is not None else MAX_ROUNDS
     global _last_turn_written_files
     _last_turn_written_files = []
 
@@ -340,9 +350,37 @@ def decide(
 
     def _finish(reply: str) -> str:
         _last_turn_written_files[:] = this_turn_files
-        return reply
+        # LLMs sometimes append "PASS" on its own line as a closing marker; strip it
+        # so it doesn't end up in the hub message as literal text.
+        if reply:
+            reply = re.sub(r"\n+\s*PASS\s*$", "", reply, flags=re.IGNORECASE).strip()
+            if not reply:
+                return "PASS"
+        if not reply or reply.upper() == "PASS" or not this_turn_files:
+            return reply
+        result = reply
+        for fname in this_turn_files:
+            # Skip only if reply already has a proper Klar med header for this file
+            if f"Klar med: `{fname}`" in result:
+                continue
+            p = Path(WORKSPACE_DIR) / fname
+            if not p.is_file():
+                continue
+            try:
+                content = p.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            ext = fname.rsplit(".", 1)[-1].lower() if "." in fname else ""
+            lang = _LANG_BY_EXT.get(ext, "")
+            body = content[:3500]
+            note = (
+                f"\n(truncated — {len(content)} chars total, full file on workspace)"
+                if len(content) > 3500 else ""
+            )
+            result = result + f"\nKlar med: `{fname}`\n```{lang}\n{body}\n```{note}"
+        return result
 
-    for _ in range(MAX_ROUNDS):
+    for _ in range(rounds_cap):
         response = _call_llm(history, system_prompt)
         if response is None or not response.choices:
             _rollback(history)
@@ -462,6 +500,12 @@ def _rollback(history: list) -> None:
 _WRITE_FILE_RE = re.compile(
     r">>?\s*['\"]?([\w./-]+\.[\w]+)['\"]?",
 )
+# Additional file-creation patterns: touch / tee / cp-target / mv-target.
+# Each captures a single filename (the destination) so we can track files
+# created via paths other than shell redirects.
+_TOUCH_RE = re.compile(r"\btouch\s+([\w./-]+\.[\w]+)\b")
+_TEE_RE = re.compile(r"\btee\s+(?:-\w+\s+)*([\w./-]+\.[\w]+)\b")
+_CP_MV_RE = re.compile(r"\b(?:cp|mv)\s+(?:-\w+\s+)*\S+\s+([\w./-]+\.[\w]+)\b")
 
 _LANG_BY_EXT = {
     "py": "python", "js": "javascript", "ts": "typescript", "jsx": "jsx",
@@ -471,21 +515,25 @@ _LANG_BY_EXT = {
 
 
 def _extract_written_file(command: str) -> str | None:
-    """Return filename from a heredoc/redirect bash command, if any."""
+    """Return filename from a bash command that creates/modifies a file.
+
+    Catches: shell redirects (`>` / `>>`), `touch`, `tee`, `cp`, `mv` targets.
+    """
     if not command:
         return None
-    m = _WRITE_FILE_RE.search(command)
-    return m.group(1) if m else None
+    for pattern in (_WRITE_FILE_RE, _TOUCH_RE, _TEE_RE, _CP_MV_RE):
+        m = pattern.search(command)
+        if m:
+            return m.group(1)
+    return None
 
 
 def _build_autosummary(
     tools: list[str], files: list[str], suffix: str = "",
 ) -> str:
-    """Compose the [auto-summary] fallback message, pasting last-written file if small."""
-    actions = tools[-4:]
-    base = f"[auto-summary] Actions this turn: {'; '.join(actions)}{suffix}."
+    """Return CODE TRANSFER format for the last written file, or PASS if nothing to share."""
     if not files:
-        return base
+        return "PASS"
     seen: set[str] = set()
     ordered: list[str] = []
     for f in files:
@@ -496,15 +544,18 @@ def _build_autosummary(
     try:
         p = Path(WORKSPACE_DIR) / target
         if not p.is_file():
-            return base
+            return "PASS"
         content = p.read_text(encoding="utf-8", errors="replace")
     except OSError:
-        return base
-    if len(content) > 3000:
-        return base + f"\n\nFile `{target}` ({len(content)} chars — full file on workspace)."
+        return "PASS"
     ext = target.rsplit(".", 1)[-1].lower() if "." in target else ""
     lang = _LANG_BY_EXT.get(ext, "")
-    return base + f"\n\nFile `{target}`:\n```{lang}\n{content}\n```"
+    if len(content) <= 3500:
+        body, note = content, ""
+    else:
+        body = content[:3500]
+        note = f"\n(truncated — {len(content)} chars total, full file on workspace)"
+    return f"Klar med: `{target}`\n```{lang}\n{body}\n```{note}"
 
 
 

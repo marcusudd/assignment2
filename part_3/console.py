@@ -3,8 +3,10 @@ Local control console — runs in a background thread, reads stdin commands.
 Lets Marcus adjust caps and pause/resume the agent loop in real-time.
 """
 
+import os
 import threading
 import agent as ag
+import hub
 
 
 class Console(threading.Thread):
@@ -13,7 +15,10 @@ class Console(threading.Thread):
         self.state = state
 
     def run(self) -> None:
-        print("[console] ready — commands: y | n | status | cap N | limit N | pause | resume | quit")
+        print(
+            "[console] ready — commands: y | n | status | cap N | limit N | "
+            "pause | resume | quit | say <message>"
+        )
         while True:
             try:
                 line = input().strip()
@@ -68,8 +73,23 @@ class Console(threading.Thread):
             self.state.running = False
             print("[console] shutting down…")
 
+        elif cmd == "say":
+            text = line[3:].strip()  # everything after "say " — preserve case/spaces
+            if not text:
+                print("[console] usage: say <message>")
+                return
+            poster = os.getenv("CONSOLE_POSTER", "human:marcus")
+            try:
+                hub.send_message(poster, text)
+                print(f"[console] posted to hub as `{poster}`")
+            except Exception as e:
+                print(f"[console] post failed: {e}")
+
         else:
-            print("[console] unknown command. try: y | n | status | cap N | limit N | pause | resume | quit")
+            print(
+                "[console] unknown command. try: y | n | status | cap N | limit N | "
+                "pause | resume | quit | say <message>"
+            )
 
 
 class AgentState:
@@ -85,6 +105,27 @@ class AgentState:
         # Track the last canned-fallback message so we don't repeat it back-to-back
         self.last_canned_at: float = 0.0
         self.last_canned_text: str = ""
-        # Same idea for [auto-summary] fallbacks — Haiku hits MAX_ROUNDS frequently
-        self.last_autosum_at: float = 0.0
-        self.last_autosum_text: str = ""
+        # Sticky operator directive — survives across polling cycles until task
+        # completes or a newer operator imperative arrives. Without this the
+        # nudge stops firing once the operator's message is no longer in the
+        # current poll batch, and agents PASS forever on multi-step tasks.
+        self.active_op_cmd: str | None = None
+        self.active_op_seq: int = 0
+        # Peer-file health tracking — populated by auto_save_peer_code when a
+        # delivered file looks broken (truncated, syntax error, conflicting).
+        # Surfaced in workspace gap so the LLM can decide to ask for a repost
+        # or rewrite locally. {filename: "truncated"|"syntax: ..."|"conflict"}
+        self.peer_file_issues: dict[str, str] = {}
+        # Circuit breaker: count consecutive ABORTs (promise/non-delivery).
+        # After N in a row, force PASS for one round to break a stuck retry
+        # loop that would otherwise burn the token budget without delivering.
+        self.consecutive_aborts: int = 0
+        # Buffer for split CODE TRANSFER messages: {fname: {part_n: code, ...}}
+        # When a peer posts a file as "(part 1/N)" + "(part 2/N)" etc., we buffer
+        # each part here and concatenate when all N parts have arrived. Saves the
+        # full file deterministically rather than asking peer to repost.
+        self.split_transfer_buffer: dict[str, dict[int, str]] = {}
+        self.split_transfer_meta: dict[str, dict] = {}  # {fname: {"total": N, "peer": str, "last_seq": int}}
+
+    def at_cap(self) -> bool:
+        return self.messages_sent >= self.msg_cap

@@ -25,6 +25,7 @@ class Console(threading.Thread):
             " limit <N>        change per-session message cap\n"
             " y | n            approve / deny a pending bash command\n"
             " quit             shut the agent down cleanly\n"
+            " detach           Ctrl-P  Ctrl-Q  (Ctrl-C kills the agent!)\n"
             "───────────────────────────────────────────────────────────────\n"
             " Tip: type   say hi team   to introduce yourself to the chat.\n",
             flush=True,

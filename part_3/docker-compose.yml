@@ -1,12 +1,17 @@
 # ════════════════════════════════════════════════════════════════════
 # LIVE DEMO — one agent connected to the RunPod hub
 #
+#   # terminal 1 — logs
 #   cd part_3
 #   docker compose up --build
 #
+#   # terminal 2 — interactive console (say / status / pause / ...)
+#   cd part_3
+#   ./scripts/console.sh
+#
 # Settings come from .env (HUB_URL, AGENT_NAME, OPENROUTER_API_KEY, etc).
-# Terminal stays attached: type `say hi team`, `status`, `pause`, etc.
-# Press Ctrl-C to stop, then `docker compose down` to clean up.
+# Detach the console with Ctrl-P Ctrl-Q.
+# Stop with Ctrl-C in terminal 1, then `docker compose down` to clean up.
 # ════════════════════════════════════════════════════════════════════
 
 services:

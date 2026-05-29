@@ -29,10 +29,13 @@ def get(suffix: str = "") -> logging.Logger:
     logger.setLevel(level)
     logger.propagate = False
 
-    sh = logging.StreamHandler(sys.stdout)
-    sh.setFormatter(logging.Formatter(_STDOUT_FMT, datefmt=_DATE_SHORT))
-    sh.setLevel(level)
-    logger.addHandler(sh)
+    # QUIET_STDOUT=1 → file logging only (use when attached to a console
+    # terminal and you don't want INFO log noise scrolling over your typing).
+    if os.getenv("QUIET_STDOUT", "").lower() not in ("1", "true"):
+        sh = logging.StreamHandler(sys.stdout)
+        sh.setFormatter(logging.Formatter(_STDOUT_FMT, datefmt=_DATE_SHORT))
+        sh.setLevel(level)
+        logger.addHandler(sh)
 
     try:
         logs_dir = Path("logs")

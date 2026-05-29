@@ -1,17 +1,19 @@
 # ════════════════════════════════════════════════════════════════════
 # LOCAL DEMO — mock hub + web UI + three identical agents
 #
+#   # terminal 1 — logs (hub + 3 agents)
 #   cd part_3
 #   docker compose -f docker-compose.local.yml up --build
 #
-# After it boots:
-#   • Open  http://localhost:8080  to see the chat UI and post as a human
-#   • Watch the mixed agent logs in the terminal
-#   • To talk to ONE agent via the console (say / status / pause / etc):
-#       docker attach part_3-agent1-1
-#     (detach with Ctrl-P Ctrl-Q — do NOT use Ctrl-C, it kills the agent)
+#   # terminal 2 — interactive console for agent1
+#   cd part_3
+#   ./scripts/console.sh local
 #
-# Press Ctrl-C in the compose terminal to stop everything, then:
+# After it boots:
+#   • Open  http://localhost:8080  for the chat UI (post as `human:marcus`)
+#   • Detach the console with Ctrl-P Ctrl-Q (Ctrl-C would kill agent1)
+#
+# Stop with Ctrl-C in terminal 1, then:
 #   docker compose -f docker-compose.local.yml down
 # ════════════════════════════════════════════════════════════════════
 

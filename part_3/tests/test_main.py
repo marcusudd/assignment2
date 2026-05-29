@@ -823,6 +823,28 @@ class TestSecurityCheck:
     def test_blocks_secret_var(self):
         assert agent.security_check("echo $OPENROUTER_API_KEY") is not None
 
+    def test_allows_heredoc_with_flask_route_in_body(self):
+        # Regression: URL-style paths inside a heredoc body must NOT trip
+        # the absolute-path guard. The target file `backend/main.py` is
+        # relative — the route string is shell-side data, not an argument.
+        cmd = (
+            "cat > backend/main.py <<'EOF'\n"
+            "@app.route('/scrape', methods=['POST'])\n"
+            "def scrape(): pass\n"
+            "EOF"
+        )
+        assert agent.security_check(cmd) is None
+
+    def test_allows_heredoc_unquoted_delimiter(self):
+        cmd = "cat > app.py <<EOF\nprint('/tmp/foo would be a path')\nEOF"
+        assert agent.security_check(cmd) is None
+
+    def test_still_blocks_absolute_path_in_head(self):
+        # The fix must not weaken the actual check — paths in the shell-arg
+        # part of the command (before any heredoc) are still rejected.
+        assert agent.security_check("cat /etc/passwd") is not None
+        assert agent.security_check("cat > /etc/hosts <<EOF\ndata\nEOF") is not None
+
 
 class TestReplyMentionsMissingRequired:
     """dup-ABORT bypass: send anyway if reply names a still-missing required file."""

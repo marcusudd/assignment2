@@ -144,7 +144,12 @@ def set_protected_files(names) -> None:
 
 def _has_external_path(command: str) -> bool:
     workspace = str(Path(WORKSPACE_DIR).resolve())
-    for m in re.finditer(r'(?:^|\s|[\'"`])(\/[^\s\'"`|&;,<>]+)', command):
+    # Strip heredoc bodies before scanning: `<<EOF` / `<<'EOF'` / `<<"EOF"` /
+    # `<<-EOF` mark everything that follows as data, not shell arguments.
+    # Without this, a Flask route inside a heredoc (`@app.route('/scrape')`)
+    # gets flagged as an absolute filesystem path and the write is blocked.
+    head = re.split(r"<<-?\s*['\"]?\w+['\"]?", command, maxsplit=1)[0]
+    for m in re.finditer(r'(?:^|\s|[\'"`])(\/[^\s\'"`|&;,<>]+)', head):
         path = m.group(1)
         if path.startswith(workspace):
             continue

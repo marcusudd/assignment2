@@ -846,6 +846,46 @@ class TestSecurityCheck:
         assert agent.security_check("cat > /etc/hosts <<EOF\ndata\nEOF") is not None
 
 
+class TestNormalizePass:
+    """`<name>: PASS`, `PASS.`, `[PASS]` etc. must collapse to bare PASS so
+    the loop's `if reply == 'PASS'` check catches them and they never go to
+    the hub as real messages."""
+
+    def test_bare_pass(self):
+        assert agent._normalize_pass("PASS", "marcus-local-3") == "PASS"
+
+    def test_lowercase_pass(self):
+        assert agent._normalize_pass("pass", "marcus-local-3") == "PASS"
+
+    def test_name_prefix(self):
+        # The actual misbehavior observed in marcus-local-3.log
+        assert agent._normalize_pass(
+            "marcus-local-3: PASS", "marcus-local-3"
+        ) == "PASS"
+
+    def test_name_prefix_case_insensitive(self):
+        assert agent._normalize_pass(
+            "Marcus-Local-3: pass", "marcus-local-3"
+        ) == "PASS"
+
+    def test_punctuation_variants(self):
+        for variant in ("PASS.", "PASS!", "[PASS]", "(PASS)", "**PASS**", "  PASS  "):
+            assert agent._normalize_pass(variant, "agent") == "PASS", variant
+
+    def test_real_reply_unchanged(self):
+        # Anything with actual content beyond a PASS sentinel must be passed
+        # through verbatim.
+        reply = "Klar med: implemented backend skeleton."
+        assert agent._normalize_pass(reply, "marcus-local-3") == reply
+
+    def test_pass_inside_sentence_not_normalized(self):
+        reply = "Note: PASS this step over to the next agent."
+        assert agent._normalize_pass(reply, "marcus-local-3") == reply
+
+    def test_empty_reply(self):
+        assert agent._normalize_pass("", "marcus-local-3") == ""
+
+
 class TestReplyMentionsMissingRequired:
     """dup-ABORT bypass: send anyway if reply names a still-missing required file."""
 

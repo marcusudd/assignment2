@@ -46,6 +46,22 @@ AGENT_NAME = os.getenv("AGENT_NAME", "macmini1")
 _last_turn_written_files: list[str] = []
 
 
+def _normalize_pass(reply: str, agent_name: str) -> str:
+    """Return 'PASS' if reply is effectively a pass sentinel; else return reply.
+
+    Models sometimes echo back `<my-name>: PASS`, `PASS.`, `[PASS]`, `**PASS**`
+    etc. instead of the bare `PASS` the loop expects. Without normalization
+    those strings get sent to the hub chat as real messages.
+    """
+    if not reply:
+        return reply
+    candidate = reply.strip()
+    name_re = rf"^(?:{re.escape(agent_name)}\s*:\s*)+"
+    candidate = re.sub(name_re, "", candidate, flags=re.IGNORECASE).strip()
+    candidate = re.sub(r"^[\s\[\(\*_`'\"]+|[\s\]\)\*_`'\".!?]+$", "", candidate)
+    return "PASS" if candidate.upper() == "PASS" else reply
+
+
 def get_last_turn_written_files() -> list[str]:
     """Paths written via bash/edit_file in the most recent decide() call."""
     return list(_last_turn_written_files)
@@ -361,6 +377,9 @@ def decide(
             reply = re.sub(r"\n+\s*PASS\s*$", "", reply, flags=re.IGNORECASE).strip()
             if not reply:
                 return "PASS"
+            # Catch "<my-name>: PASS", "[PASS]", "PASS.", etc. before they
+            # leak into the hub chat as real messages.
+            reply = _normalize_pass(reply, AGENT_NAME)
         if not reply or reply.upper() == "PASS" or not this_turn_files:
             return reply
         result = reply

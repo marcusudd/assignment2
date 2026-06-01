@@ -67,3 +67,39 @@
 ### Examination
 - 2026-05-29: All agents connected live — GraderBot evaluates each agent against criteria
 - Attendance mandatory
+
+---
+
+## VG — Claude-Code / Codex Competitor with Sub-Agents 🔲
+
+**Goal:** Build a competitor to Claude Code / Codex featuring sub-agent handling and context engineering. Graded against the student's own approved requirement specification + a minimum feature set, both demonstrated live.
+
+**Canonical spec:** `#assignment-vg` Discord channel (SSoT). Local reference rubric: `~/Downloads/assn-vg-grading-template.md` (v2.0).
+
+### Minimum feature set
+- [ ] **VG.1 — Multi-agents: parallel sub-agents** — main agent starts 2+ sub-agents that run in parallel AND uses their results back in the main session
+- [ ] **VG.2 — Advanced context engineering** — concrete mechanism keeps the context window under control (automatic compaction, summarising/snipping old tool output, tool-result size caps, MCP-style external context)
+- [ ] **VG.3 — Real-time cost monitoring + budget warnings + hard cap** — live token/USD readout, warning threshold, AND a hard cap that actually stops the agent (not just warns)
+- [ ] **VG.4 — Protection against harmful tool calls** — destructive/dangerous calls actively blocked or gated *before* execution (allow/deny-list, confirmation, sandbox); not just a prompt instruction
+- [ ] **VG.5 — Bash execution** (paired with VG.4 — the guard must cover bash)
+- [ ] **VG.6 — Partial file editing** — agent edits a *section* of a file (find-and-replace / line ranges), not just whole-file overwrites
+- [ ] **VG.7 — Deployable / idiot-proof packaging** — `docker compose up` (or equivalent) + a README a non-author can follow
+- [ ] **VG.8 — Config file + env-var secrets** — all settings in a config file, all secrets from env vars, `.env` git-ignored, `.env.example` checked in
+- [ ] **VG.9 — Agent autonomy: tool-call vs. yield** — agent itself decides each turn whether to call another tool or yield back to the user
+
+### Hard gates (any FAIL blocks VG)
+- Own requirement specification authored AND approved by the examining teacher
+- Student-prompted solution (no hand-written code); chat/prompt sessions shown on request
+- Architecture-level understanding the student can explain orally at the demo
+- Live (or recorded / AI-avatar) demo of the working system
+- Artefacts (spec, build, demo evidence) actually loaded by the grader
+
+### Substance gate (judgement, not a checkbox)
+- Each claimed feature actually *works* in the live demo — not just exists in code
+- Features genuinely integrated — sub-agent results actually used, the cap actually enforced, the safety gate actually blocking
+- Oral check confirms architecture-level understanding (strengths, weaknesses, failure modes)
+- At the goldcoin-adjusted bar: a credible product, not a checkbox shell
+
+### Examiner benchmark
+- ~3h examiner time (≈40h student-equivalent), adjusted down per goldcoins spent
+- Tech-stack neutral — any language allowed; judged on system + demo

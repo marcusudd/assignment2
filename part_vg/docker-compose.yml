@@ -1,0 +1,19 @@
+services:
+  bifrost:
+    build: .
+    image: bifrost:latest
+    env_file:
+      - .env                    # OPENROUTER_API_KEY (git-ignored, never committed)
+    environment:
+      # Reachable from inside the container to LM Studio on the host (H2)
+      LOCAL_BASE_URL: http://host.docker.internal:1234/v1
+      AUTO_APPROVE: "true"      # D14: container sandbox is the guard
+    volumes:
+      - ./workspace:/app/workspace   # persist workspace between runs
+      - ./sessions:/app/sessions     # persist chat sessions (HG-2)
+    # Pass a task at runtime:
+    #   docker compose run bifrost "Add /orders endpoint"
+    # Or override cap:
+    #   docker compose run bifrost --cap 0.05 "List all Python files"
+    stdin_open: true
+    tty: true

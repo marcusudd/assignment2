@@ -1,0 +1,37 @@
+[local]
+base_url = "http://localhost:1234/v1"
+model    = "qwen3.6-27b"
+
+[cloud]
+base_url = "https://openrouter.ai/api/v1"
+model    = "anthropic/claude-sonnet-4-6"
+
+[router]
+# Model used for task decomposition planning (always cloud — high leverage decision)
+model = "anthropic/claude-sonnet-4-6"
+
+[compaction]
+# Model used to summarise old conversation turns (local = free)
+model             = "local"
+token_threshold   = 8000   # compact main-session history above this
+
+[agent]
+max_output  = 5000   # tool output cap (chars)
+max_rounds  = 15     # per-worker LLM round limit
+workspace_dir = "./workspace"
+
+[cost]
+cap_usd            = 0.50   # hard stop (lower for demo: 0.05)
+warning_threshold  = 0.75   # fraction of cap that triggers warning
+
+comparison_models = [
+    "anthropic/claude-opus-4-8",
+    "anthropic/claude-sonnet-4-6",
+    "anthropic/claude-haiku-4-5",
+    "openai/gpt-5.5",
+    "openai/gpt-5",
+    "openai/gpt-5-mini",
+    "google/gemini-2.5-pro",
+    "google/gemini-2.5-flash",
+    "google/gemini-2.5-flash-lite",
+]

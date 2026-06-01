@@ -1,0 +1,187 @@
+"""
+Orchestrator — parallel fan-out + integration pass (D1, D2, D8, D5, H1).
+
+Flow:
+  1. Router produces a Plan (mode 1/2/3).
+  2. For mode 3: N SubAgents start simultaneously via ThreadPoolExecutor.
+     start_ts values overlap → genuine parallelism proof (H1).
+  3. Cooperative abort: if BudgetExceeded fires in any worker, the stop
+     event is set and remaining workers halt at their next loop top.
+  4. Integration pass (cloud): reads all worker outputs, makes fixup edits
+     (cross-file imports, registers router in main.py, etc.), runs tests.
+  5. Returns final result string.
+"""
+import sys
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
+
+from backends import BackendSpec
+from config import Config
+from cost import BudgetExceeded, CostTracker
+from router import Plan, Router
+from state import StateRegistry, WorkerState
+from subagent import SubAgent, WorkerPlan
+
+_INTEGRATION_SYSTEM = """\
+You are a senior engineer doing an integration pass after parallel workers
+have each written one file. Your job:
+
+1. Read every file listed in the task using read_file.
+2. Fix any cross-file reference errors (wrong import names, missing
+   registrations, type mismatches between schemas and routers).
+3. Register any new routers/modules in the app's main entry point
+   (e.g. app.include_router(...) in main.py).
+4. Run the test suite with bash: python -m pytest -x -q 2>&1 | head -40
+5. If tests fail, apply the minimal fix to make them pass and re-run.
+6. Reply with a short summary: what you fixed and whether tests passed.
+
+Be surgical — only change what is broken. Do not rewrite working code.
+"""
+
+
+class Orchestrator:
+    def __init__(
+        self,
+        config: Config,
+        local_backend: BackendSpec,
+        cloud_backend: BackendSpec,
+        cost_tracker: CostTracker,
+        registry: StateRegistry,
+        worker_system_prompt: str,
+    ) -> None:
+        self.config = config
+        self.local = local_backend
+        self.cloud = cloud_backend
+        self.cost_tracker = cost_tracker
+        self.registry = registry
+        self.worker_system_prompt = worker_system_prompt
+        self.router = Router(
+            config=config,
+            cloud_base_url=cloud_backend.base_url,
+            cloud_api_key=cloud_backend.api_key,
+        )
+        self.plan: Plan | None = None
+        self.routing_summary: str = ""
+
+    def run(self, task: str) -> str:
+        """Top-level entry. Returns a plain-text result."""
+        self.plan = self.router.plan(task)
+        self.routing_summary = (
+            f"Mode {self.plan.mode}: {self.plan.reasoning} "
+            f"({len(self.plan.workers)} worker(s))"
+        )
+        print(f"[orchestrator] {self.routing_summary}", file=sys.stderr)
+
+        if self.plan.mode == 1:
+            return self._run_single(self.plan.workers[0])
+        if self.plan.mode == 2:
+            return self._run_single(self.plan.workers[0])
+        return self._run_fanout(self.plan)
+
+    # ------------------------------------------------------------------
+    # Mode 1 / 2 — single worker
+    # ------------------------------------------------------------------
+    def _run_single(self, wp: WorkerPlan) -> str:
+        backend = self.local if wp.backend_name == "local" else self.cloud
+        agent = self._make_agent(wp, backend)
+        try:
+            return agent.run()
+        except BudgetExceeded as e:
+            return f"ABORTED: {e}"
+
+    # ------------------------------------------------------------------
+    # Mode 3 — parallel fan-out (VG.1)
+    # ------------------------------------------------------------------
+    def _run_fanout(self, plan: Plan) -> str:
+        workers = plan.workers
+        n = len(workers)
+        results: dict[str, str] = {}
+        agents: dict[str, SubAgent] = {}
+
+        for wp in workers:
+            backend = self.local if wp.backend_name == "local" else self.cloud
+            agents[wp.worker_id] = self._make_agent(wp, backend)
+
+        print(
+            f"[orchestrator] fan-out: {n} workers starting simultaneously",
+            file=sys.stderr,
+        )
+
+        with ThreadPoolExecutor(max_workers=n) as executor:
+            future_to_id = {
+                executor.submit(agents[wp.worker_id].run): wp.worker_id
+                for wp in workers
+            }
+            for future in as_completed(future_to_id):
+                wid = future_to_id[future]
+                try:
+                    results[wid] = future.result()
+                except BudgetExceeded as e:
+                    results[wid] = f"ABORTED: {e}"
+                except Exception as e:
+                    results[wid] = f"ERROR: {e}"
+
+        if self.cost_tracker.should_stop():
+            return "Run aborted: budget cap reached during parallel execution."
+
+        # Integration pass — uses results and modifies files (D8, VG.1 substance)
+        return self._integration_pass(plan, results)
+
+    # ------------------------------------------------------------------
+    # Integration pass (D8)
+    # ------------------------------------------------------------------
+    def _integration_pass(self, plan: Plan, worker_results: dict[str, str]) -> str:
+        all_files = [f for wp in plan.workers for f in wp.owned_files]
+        summary_lines = [
+            f"Worker {wid}: {res[:120]}" for wid, res in worker_results.items()
+        ]
+        task = (
+            f"Integration pass after {len(plan.workers)} parallel workers.\n\n"
+            f"Files produced: {', '.join(all_files) or '(none listed)'}\n\n"
+            f"Worker summaries:\n" + "\n".join(summary_lines)
+        )
+
+        integration_wp = WorkerPlan(
+            worker_id="integration",
+            role="integrator",
+            task=task,
+            owned_files=[],       # integrator may edit any file
+            backend_name="cloud",
+        )
+        # Register a state entry for the integrator so the UI shows it
+        self.registry.register(
+            WorkerState(
+                worker_id="integration",
+                role="integrator",
+                task_summary="Integration + test pass",
+                backend=self.cloud.name,
+                model=self.cloud.model,
+            )
+        )
+
+        agent = SubAgent(
+            plan=integration_wp,
+            local_backend=self.local,
+            cloud_backend=self.cloud,
+            cost_tracker=self.cost_tracker,
+            registry=self.registry,
+            config=self.config,
+            system_prompt=_INTEGRATION_SYSTEM,
+        )
+        try:
+            return agent.run()
+        except BudgetExceeded as e:
+            return f"Integration aborted (budget): {e}"
+
+    # ------------------------------------------------------------------
+    def _make_agent(self, wp: WorkerPlan, backend: BackendSpec) -> SubAgent:
+        return SubAgent(
+            plan=wp,
+            local_backend=self.local,
+            cloud_backend=self.cloud,
+            cost_tracker=self.cost_tracker,
+            registry=self.registry,
+            config=self.config,
+            system_prompt=self.worker_system_prompt,
+        )

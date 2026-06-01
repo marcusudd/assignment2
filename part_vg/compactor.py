@@ -43,13 +43,24 @@ def compact_if_needed(
     if estimated < config.compaction_token_threshold:
         return False
 
-    # Keep the 4 most recent turns intact; summarise everything older.
+    # Keep the most recent turns intact; summarise everything older.
     keep_tail = 4
     if len(history) <= keep_tail:
         return False
 
-    to_summarise = history[:-keep_tail]
-    tail = history[-keep_tail:]
+    split = len(history) - keep_tail
+    # Tool-call safety: the tail must NOT start on an orphan `tool` message
+    # (a tool result whose assistant(tool_calls) parent got summarised away —
+    # the API rejects that with a 400). Walk the split back until the tail
+    # begins on a user/assistant/system boundary, keeping each
+    # assistant(tool_calls) together with its following tool results.
+    while split > 0 and history[split]["role"] == "tool":
+        split -= 1
+    if split <= 0:
+        return False
+
+    to_summarise = history[:split]
+    tail = history[split:]
 
     turns_text = "\n\n".join(
         f"[{m['role']}]: {str(m.get('content', ''))[:500]}" for m in to_summarise

@@ -3,10 +3,29 @@ Tool implementations — adapted from part_3/agent.py.
 workspace_dir is a parameter (not a global) so each SubAgent can use its own.
 """
 import json
+import os
 import subprocess
+import sys
 from pathlib import Path
 
 from security import resolve_path, security_check
+
+
+def _subprocess_env() -> dict:
+    """Make `python3`/`pytest` in the workspace resolve to Bifrost's interpreter.
+
+    Locally, Bifrost runs inside a venv that has the demo deps (fastapi,
+    sqlalchemy, pytest); the workspace subprocess otherwise inherits PATH and
+    `python3` points at the system Python without those deps. Prepending the
+    interpreter's bin dir fixes that. In Docker there is no venv (deps are
+    global) so this is a no-op.
+    """
+    env = dict(os.environ)
+    in_venv = sys.prefix != sys.base_prefix
+    if in_venv:
+        bin_dir = str(Path(sys.executable).parent)
+        env["PATH"] = bin_dir + os.pathsep + env.get("PATH", "")
+    return env
 
 # OpenAI-style tool schema sent to the LLM
 TOOL_SCHEMAS = [
@@ -83,6 +102,7 @@ def tool_bash(
             text=True,
             timeout=30,
             cwd=workspace_dir,
+            env=_subprocess_env(),
         )
         output = result.stdout
         if result.stderr:

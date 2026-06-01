@@ -1,10 +1,10 @@
 [local]
 base_url = "http://localhost:1234/v1"
-model    = "qwen3.6-27b"
+model    = "gemma-4-26b-a4b-it-mlx"
 
 [cloud]
 base_url = "https://openrouter.ai/api/v1"
-model    = "anthropic/claude-sonnet-4-6"
+model    = "anthropic/claude-haiku-4-5"   # dev: swap to claude-sonnet-4-6 for demo
 
 [router]
 # Model used for task decomposition planning (always cloud — high leverage decision)
@@ -21,7 +21,7 @@ max_rounds  = 15     # per-worker LLM round limit
 workspace_dir = "./workspace"
 
 [cost]
-cap_usd            = 0.50   # hard stop (lower for demo: 0.05)
+cap_usd            = 0.20   # dev cap — raise to 0.50 for real runs, 0.05 for demo
 warning_threshold  = 0.75   # fraction of cap that triggers warning
 
 comparison_models = [

@@ -35,34 +35,22 @@ _MULTI_RE = re.compile(
 )
 
 _DECOMPOSE_SYSTEM = """\
-You are a senior software architect decomposing a coding task for a
-parallel multi-agent system. Your output is JSON only — no prose.
+Decompose a coding task into parallel workers. Output ONLY a JSON object.
 
-Rules:
-- owned_files must be DISJOINT across all workers (no file appears twice).
-- Shared framework files (main.py, __init__.py, app.py) are NOT assigned
-  to any worker; the orchestrator handles them after the fan-out.
-- Assign backend "local" for mechanical tasks (ORM models, Pydantic schemas,
-  simple CRUD boilerplate); "cloud" for tasks requiring reasoning (business
-  logic, edge-case tests, complex algorithms).
-- Keep worker tasks self-contained: each worker should be able to complete
-  its task using only bash, read_file, and edit_file within the workspace.
-- If the task cannot meaningfully be split (only one logical unit of work),
-  set mode=2 and provide exactly one worker.
+Rules (strict):
+- mode 3 = 2+ files writable independently in parallel. Use when task names multiple files.
+- mode 2 = single logical unit (one file, one bug fix).
+- owned_files: DISJOINT across all workers. Never assign main.py/__init__.py/app.py.
+- backend: "local" for ORM/schemas/boilerplate. "cloud" for business logic/tests.
+- task: max 15 words.
+- reasoning: max 10 words.
 
-Output schema (strict JSON):
+JSON schema:
 {
-  "mode": 2 or 3,
-  "reasoning": "<one sentence>",
+  "mode": <2 or 3>,
+  "reasoning": "<10 words>",
   "workers": [
-    {
-      "worker_id": "w1",
-      "role": "coder",
-      "task": "<detailed task description>",
-      "owned_files": ["relative/path/to/file.py"],
-      "backend": "local" or "cloud",
-      "rationale": "<why this backend>"
-    }
+    {"worker_id": "w1", "role": "coder", "task": "<15 words>", "owned_files": ["path/file.py"], "backend": "local"}
   ]
 }
 """
@@ -96,9 +84,51 @@ class Router:
                     )
                 ],
             )
+
+        # Fast path: if task explicitly names 2+ disjoint .py files, decompose
+        # without an LLM call — deterministic and never truncates.
+        fast = self._fast_decompose(task)
+        if fast:
+            return fast
+
         return self._cloud_decompose(task)
 
     # ------------------------------------------------------------------
+    def _fast_decompose(self, task: str) -> Plan | None:
+        """If task explicitly names 2+ .py files, decompose without LLM."""
+        files = re.findall(r'(?:[\w/-]+/)?[\w-]+\.py', task)
+        # Deduplicate, filter out shared files the orchestrator owns
+        skip = {"main.py", "app.py", "__init__.py", "conftest.py"}
+        files = [f for f in dict.fromkeys(files) if Path(f).name not in skip]
+        if len(files) < 2:
+            return None
+
+        # Heuristic backend assignment
+        _LOCAL_DIRS = {"models", "schemas", "migrations", "db"}
+        def _backend(f: str) -> str:
+            parts = Path(f).parts
+            return "local" if any(p in _LOCAL_DIRS for p in parts) else "cloud"
+
+        workers = [
+            WorkerPlan(
+                worker_id=f"w{i+1}",
+                role="coder",
+                task=f"Implement the required code in {f} as described in the task",
+                owned_files=[f],
+                backend_name=_backend(f),
+            )
+            for i, f in enumerate(files)
+        ]
+        backends = sum(1 for w in workers if w.backend_name == "local")
+        return Plan(
+            mode=3,
+            reasoning=(
+                f"Task names {len(files)} files — "
+                f"{backends} local, {len(files)-backends} cloud"
+            ),
+            workers=workers,
+        )
+
     def _is_simple(self, task: str) -> bool:
         has_simple = bool(_SIMPLE_RE.search(task))
         has_multi = bool(_MULTI_RE.search(task))
@@ -119,6 +149,7 @@ class Router:
             api_key=self._cloud_api_key,
             tools=None,
             max_tokens=1024,
+            json_mode=True,
         )
 
         if response is None:

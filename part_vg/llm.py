@@ -15,6 +15,7 @@ def call_llm(
     api_key: str,
     tools: list[dict] | None = None,
     max_tokens: int = 2048,
+    json_mode: bool = False,
 ) -> tuple[Any | None, int, int]:
     """
     Call the LLM and return (response, prompt_tokens, completion_tokens).
@@ -25,6 +26,8 @@ def call_llm(
         kwargs: dict = dict(model=model, max_tokens=max_tokens, messages=messages)
         if tools:
             kwargs["tools"] = tools
+        if json_mode:
+            kwargs["response_format"] = {"type": "json_object"}
         response = client.chat.completions.create(**kwargs)
         prompt_tokens = response.usage.prompt_tokens if response.usage else 0
         completion_tokens = response.usage.completion_tokens if response.usage else 0

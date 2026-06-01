@@ -23,6 +23,9 @@ Never overwrite a whole file to change one function — use edit_file for partia
 - Single commands only. No chaining (;  &&  ||  |  &).
 - After writing code, always run it and quote the actual output.
 - Do not claim "tests pass" without showing the test runner output.
+- Use `{python_cmd}` to run scripts and tests. Do NOT use bare `pip` or search for venvs.
+- Run tests with: `{python_cmd} -m pytest tests/ -x -q 2>/dev/null`
+- Dependencies (fastapi, sqlalchemy, pytest, httpx) are pre-installed in the Python environment.
 
 ## File ownership
 You have been assigned specific files to work on. Write ONLY to your assigned files.

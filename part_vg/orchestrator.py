@@ -32,7 +32,8 @@ have each written one file. Your job:
    registrations, type mismatches between schemas and routers).
 3. Register any new routers/modules in the app's main entry point
    (e.g. app.include_router(...) in main.py).
-4. Run the test suite with bash: python -m pytest -x -q 2>&1 | head -40
+4. Run the test suite with bash: python3 -m pytest -x -q 2>/dev/null
+   (NEVER use pipes like | head — they are blocked. Output is auto-capped.)
 5. If tests fail, apply the minimal fix to make them pass and re-run.
 6. Reply with a short summary: what you fixed and whether tests passed.
 

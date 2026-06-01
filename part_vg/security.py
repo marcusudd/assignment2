@@ -10,7 +10,7 @@ _BLOCKED: list[tuple[str, str]] = [
     (r"\brm\b.*-[rRfF]", "recursive/force delete"),
     (r"\bdd\b", "dd command"),
     (r"\bmkfs\b", "filesystem format"),
-    (r">\s*/dev/", "write to device"),
+    (r"(?<!2)>\s*/dev/(?!null)", "write to device"),
     (r":\s*\(\s*\)\s*\{", "fork bomb"),
     (r"\bsudo\b", "sudo"),
     (r"\bsu\b(?:\s|$)", "su"),

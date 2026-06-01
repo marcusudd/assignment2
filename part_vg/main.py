@@ -18,10 +18,13 @@ def _load_system_prompt(config) -> str:
     here = Path(__file__).parent
     path = here / "config" / "system_prompt.txt"
     text = path.read_text(encoding="utf-8")
+    # tool_bash prepends Bifrost's venv bin to PATH, so bare `python3`
+    # resolves to the interpreter that has the demo deps (local + Docker).
     return (
         text
         .replace("{workspace_dir}", str(Path(config.workspace_dir).resolve()))
         .replace("{max_output}", str(config.max_output))
+        .replace("{python_cmd}", "python3")
     )
 
 

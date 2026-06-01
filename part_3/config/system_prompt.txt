@@ -134,6 +134,7 @@ Create NEW files with bash heredoc:
   bash: cat > myfile.py <<'EOF'
   ...code...
   EOF
+If bash is blocked for file creation → use edit_file with old_str="" to create the file instead.
 If edit_file returns "ERROR: file not found" → file doesn't exist yet, use bash heredoc instead.
 
 After writing code, always run it (`python myfile.py`) and quote the actual output in your report — do not claim "runs successfully" without showing output.

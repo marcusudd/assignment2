@@ -128,7 +128,7 @@ _SOCIAL_ONLY_RE = re.compile(
 )
 # Operator silence commands — force immediate PASS without calling LLM.
 _SILENCE_DIRECTIVE_RE = re.compile(
-    r"\b(cease|desist|be\s+quiet|stop\s+talking|stop\s+responding|go\s+silent|"
+    r"\b(cease|desist|be\s+quiet|shut\s+up|stop\s+talking|stop\s+responding|go\s+silent|"
     r"tyst|håll\s+käften|var\s+tyst|silence)\b",
     re.IGNORECASE,
 )
@@ -1370,9 +1370,23 @@ def main() -> None:
             time.sleep(POLL_INTERVAL)
             continue
 
-        # Operator silence commands ("cease and desist", "be quiet", etc.) — PASS immediately.
-        if op_cmd and _SILENCE_DIRECTIVE_RE.search(op_cmd):
-            log.info("PASS — silence directive from operator")
+        # Silence directives ("stop talking", "be quiet", etc.) — sticky across batches.
+        # Must scan raw messages, not op_cmd: "stop" isn't in _IMPERATIVES so it never
+        # makes it into op_cmd, causing the check to silently fall through.
+        for _m in external:
+            if is_operator_agent(_m["agent_name"]) and _SILENCE_DIRECTIVE_RE.search(_m["content"]):
+                state.silence_active = True
+                break
+        # A fresh operator imperative (build/create/etc.) in this batch lifts the silence.
+        # Also lifted when the operator directly addresses us — a "everyone else: silence"
+        # message that simultaneously appoints us must not silence us too.
+        if new_op_msg or (
+            mentioned_me
+            and any(is_operator_agent(_m["agent_name"]) for _m in external)
+        ):
+            state.silence_active = False
+        if state.silence_active:
+            log.info("PASS — silence directive active (sticky)")
             time.sleep(POLL_INTERVAL)
             continue
 

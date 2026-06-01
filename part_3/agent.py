@@ -176,8 +176,11 @@ def _has_external_path(command: str) -> bool:
 
 
 def security_check(command: str) -> str | None:
+    # Strip heredoc bodies before scanning — code inside heredocs (JS/Python
+    # with && / || etc.) would otherwise trigger false chaining blocks.
+    head = re.split(r"<<-?\s*['\"]?\w+['\"]?", command, maxsplit=1)[0]
     for pattern, reason in _BLOCKED:
-        if re.search(pattern, command, re.IGNORECASE):
+        if re.search(pattern, head, re.IGNORECASE):
             return reason
     # Protect operator-spec files from destructive ops even without -rf flags.
     # Agents have been observed running `rm app.py` or `find . -delete` and
@@ -384,8 +387,13 @@ def decide(
             return reply
         result = reply
         for fname in this_turn_files:
-            # Skip only if reply already has a proper Klar med header for this file
-            if f"Klar med: `{fname}`" in result:
+            # Skip if the file is already reported: Swedish or English delivery header,
+            # or LLM already included a code block that references this filename.
+            if (
+                f"Klar med: `{fname}`" in result
+                or f"Done with: `{fname}`" in result
+                or (f"`{fname}`" in result and "```" in result)
+            ):
                 continue
             p = Path(WORKSPACE_DIR) / fname
             if not p.is_file():

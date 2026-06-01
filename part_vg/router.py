@@ -109,11 +109,20 @@ class Router:
             parts = Path(f).parts
             return "local" if any(p in _LOCAL_DIRS for p in parts) else "cloud"
 
+        # Each worker gets the FULL original task (so business rules like
+        # "apply a 10% discount" reach the worker that owns the relevant file),
+        # plus a pointer to which file it is responsible for.
         workers = [
             WorkerPlan(
                 worker_id=f"w{i+1}",
                 role="coder",
-                task=f"Implement the required code in {f} as described in the task",
+                task=(
+                    f"{task}\n\n"
+                    f"YOUR PART of this task: implement `{f}`. Other agents are "
+                    f"building the sibling files in parallel — implement every "
+                    f"requirement above that belongs in `{f}`, including any "
+                    f"business logic, validation, and edge cases."
+                ),
                 owned_files=[f],
                 backend_name=_backend(f),
             )

@@ -4,7 +4,7 @@ model    = "gemma-4-26b-a4b-it-mlx"
 
 [cloud]
 base_url = "https://openrouter.ai/api/v1"
-model    = "anthropic/claude-haiku-4-5"   # dev: swap to claude-sonnet-4-6 for demo
+model    = "anthropic/claude-sonnet-4-6"   # demo model; swap to claude-haiku-4-5 for cheap dev
 
 [router]
 # Model used for task decomposition planning (always cloud — high leverage decision)

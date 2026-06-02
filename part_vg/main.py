@@ -34,8 +34,10 @@ class _Tee(io.TextIOBase):
 
     def flush(self) -> None:
         self._stream.flush()
-        if not self._log.closed:
+        try:
             self._log.flush()
+        except Exception:
+            pass
 
 
 def _open_log(task: str) -> tuple[Path, io.TextIOBase]:

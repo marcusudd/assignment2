@@ -10,6 +10,7 @@ Usage:
 All options can also be set via config.toml / .env.
 """
 import argparse
+import select
 import subprocess
 import sys
 import time
@@ -31,6 +32,34 @@ def _load_system_prompt(config) -> str:
 def _reset_workspace() -> None:
     script = Path(__file__).parent / "scripts" / "reset_seed.sh"
     subprocess.run(["bash", str(script)], check=False)
+
+
+def _read_task_input(prompt: str) -> str | None:
+    """Read a (possibly multi-line / pasted) task from the user.
+
+    When a user pastes several lines, the terminal sends them as one burst —
+    ``input()`` only returns the first line, leaving the rest in the stdin
+    buffer where it leaks into the *next* input() call. We fix this by reading
+    the first line normally, then draining any additional lines that are
+    *already* buffered (no blocking). For manual single-line input this
+    behaves exactly like input().
+    """
+    print(prompt, end="", flush=True)
+    try:
+        first = input()
+    except (EOFError, KeyboardInterrupt):
+        return None
+    lines = [first]
+    # Drain any extra lines that the terminal pre-buffered from a paste.
+    while True:
+        ready, _, _ = select.select([sys.stdin], [], [], 0.05)
+        if not ready:
+            break
+        try:
+            lines.append(input())
+        except (EOFError, KeyboardInterrupt):
+            break
+    return " ".join(line.strip() for line in lines if line.strip())
 
 
 def _run_task(
@@ -130,14 +159,14 @@ def main() -> None:
         print("\n" + "─" * 60)
         print("  Bifrost — interactive mode")
         print("  Commands: 'reset' → restore seed app   'exit' → quit")
+        print("  Multi-line / pasted prompts are accepted.")
+        print(f"  Cap ${config.cost_cap_usd:.2f} is applied PER task (not session).")
         print("─" * 60)
         while True:
-            try:
-                task = input("\n🌉 Task: ").strip()
-            except (EOFError, KeyboardInterrupt):
+            task = _read_task_input("\n🌉 Task: ")
+            if task is None:
                 print("\nBye!")
                 break
-
             if not task:
                 continue
             if task.lower() in ("exit", "quit", "q"):
@@ -148,6 +177,8 @@ def main() -> None:
                 print("Workspace reset to seed app.")
                 continue
 
+            # Re-resolve backends so LM Studio coming online mid-session is detected.
+            local_backend, cloud_backend = resolve(config)
             _run_task(task, config, local_backend, cloud_backend, system_prompt, verbose)
             print()   # blank line before next prompt
     else:

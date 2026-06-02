@@ -119,7 +119,11 @@ class SubAgent:
             ):
                 self._log("🗜 compacted history (context engineering)")
 
-            self.registry.update(wid, current_action=f"LLM call #{round_num + 1}")
+            model_short = self._active.model.split("/")[-1][:20]
+            self.registry.update(
+                wid,
+                current_action=f"{model_short} thinking…"
+            )
             response, prompt_tok, completion_tok = call_llm(
                 messages=[{"role": "system", "content": self.system_prompt}] + self.history,
                 model=self._active.model,
@@ -214,9 +218,9 @@ class SubAgent:
             self._log(f"⚠ malformed JSON from model for tool {name!r}")
             return "ERROR: invalid tool argument JSON from model"
 
-        self.registry.update(
-            self.plan.worker_id, current_action=f"{name}({self._fmt_inputs(name, inputs)})"
-        )
+        model_short = self._active.model.split("/")[-1][:16]
+        human_action = self._human_action(name, inputs, model_short)
+        self.registry.update(self.plan.worker_id, current_action=human_action)
         self._log(f"▶ {name}: {self._fmt_inputs(name, inputs)}")
 
         result = dispatch_tool(
@@ -257,6 +261,22 @@ class SubAgent:
 
     def _log(self, line: str) -> None:
         self.registry.append_log(self.plan.worker_id, line)
+
+    @staticmethod
+    def _human_action(tool: str, inputs: dict, model_short: str) -> str:
+        """Return a human-readable status for the Status column."""
+        if tool == "bash":
+            cmd = inputs.get("command", "")[:30]
+            return f"{model_short}: $ {cmd}"
+        if tool == "edit_file":
+            path = inputs.get("path", "?")
+            is_create = not inputs.get("old_str", "")
+            verb = "creating" if is_create else "editing"
+            return f"{model_short}: {verb} {path}"
+        if tool == "read_file":
+            path = inputs.get("path", "?")
+            return f"{model_short}: reading {path}"
+        return f"{model_short}: {tool}"
 
     @staticmethod
     def _strip_thinking(text: str) -> str:

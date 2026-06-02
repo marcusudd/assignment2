@@ -71,7 +71,20 @@ def _worker_table(states: list[WorkerState]) -> Table:
         elapsed_str = f"{elapsed:.1f}s" if elapsed is not None else "-"
         status_text = Text(ws.status, style=_status_style(ws.status))
         if ws.current_action and ws.status == "running":
-            status_text = Text(ws.current_action[:20], style="cyan")
+            action = ws.current_action
+            if "BLOCKED" in action or "error" in action.lower():
+                style = "bold red"
+            elif "creating" in action or "editing" in action:
+                style = "bold green"
+            elif "reading" in action:
+                style = "dim cyan"
+            elif "thinking" in action:
+                style = "bold yellow"
+            elif "$ " in action:
+                style = "magenta"
+            else:
+                style = "cyan"
+            status_text = Text(action[:28], style=style)
         t.add_row(
             ws.worker_id,
             f"{icon} {ws.backend[:18]}",

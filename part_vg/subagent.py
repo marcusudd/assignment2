@@ -44,7 +44,7 @@ class SubAgent:
     def __init__(
         self,
         plan: WorkerPlan,
-        local_backend: BackendSpec,
+        active_backend: BackendSpec,
         cloud_backend: BackendSpec,
         cost_tracker: CostTracker,
         registry: StateRegistry,
@@ -52,9 +52,10 @@ class SubAgent:
         system_prompt: str,
     ) -> None:
         self.plan = plan
-        self._local = local_backend
         self._cloud = cloud_backend
-        self._active = local_backend if plan.backend_name == "local" else cloud_backend
+        # The orchestrator has already resolved which backend this worker uses
+        # (local-0, local-1, or cloud). cloud_backend is the escalation target.
+        self._active = active_backend
         self.cost_tracker = cost_tracker
         self.registry = registry
         self.config = config

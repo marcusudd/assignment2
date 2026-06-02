@@ -8,8 +8,8 @@ from config import Config, BackendConfig
 def _config(threshold=100) -> Config:
     return Config(
         openrouter_api_key="test",
-        local=BackendConfig("http://localhost:1234/v1", "lm-studio", "qwen"),
-        cloud=BackendConfig("https://openrouter.ai/api/v1", "test", "claude-sonnet"),
+        locals=[BackendConfig("local-0", "http://localhost:1234/v1", "lm-studio", "qwen")],
+        cloud=BackendConfig("cloud", "https://openrouter.ai/api/v1", "test", "claude-sonnet"),
         router_model="claude-sonnet",
         compaction_model="cloud",
         compaction_token_threshold=threshold,

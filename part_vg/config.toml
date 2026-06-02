@@ -1,28 +1,29 @@
+# Structural defaults. Model CHOICES live in .env (per-user, never committed).
+# Anything here is only a fallback if the matching .env var is unset.
+
 [local]
 base_url = "http://localhost:1234/v1"
-model    = "gemma-4-26b-a4b-it-mlx"
+# model is set via LOCAL_MODEL in .env
 
 [cloud]
 base_url = "https://openrouter.ai/api/v1"
-model    = "anthropic/claude-sonnet-4-6"   # demo model; swap to claude-haiku-4-5 for cheap dev
+# model is set via CLOUD_MODEL in .env
 
 [router]
-# Model used for task decomposition planning (always cloud — high leverage decision)
-model = "anthropic/claude-sonnet-4-6"
+# model is set via ROUTER_MODEL in .env
 
 [compaction]
-# Model used to summarise old conversation turns (local = free)
-model             = "local"
-token_threshold   = 8000   # compact main-session history above this
+# model is set via COMPACTION_MODEL in .env (default "local")
+token_threshold = 8000   # compact main-session history above this
 
 [agent]
-max_output  = 5000   # tool output cap (chars)
-max_rounds  = 15     # per-worker LLM round limit
+max_output    = 5000   # tool output cap (chars)
+max_rounds    = 15     # per-worker LLM round limit
 workspace_dir = "./workspace"
 
 [cost]
-cap_usd            = 0.20   # dev cap — raise to 0.50 for real runs, 0.05 for demo
-warning_threshold  = 0.75   # fraction of cap that triggers warning
+cap_usd           = 0.20   # dev cap — raise to 0.50 for real runs, 0.05 for demo
+warning_threshold = 0.75   # fraction of cap that triggers warning
 
 comparison_models = [
     "anthropic/claude-opus-4-8",

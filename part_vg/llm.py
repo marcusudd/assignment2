@@ -53,3 +53,19 @@ def health_check(base_url: str, api_key: str, timeout: float = 3.0) -> bool:
         return r.status_code < 500
     except Exception:
         return False
+
+
+def list_models(base_url: str, api_key: str, timeout: float = 3.0) -> list[str]:
+    """Return the model IDs the endpoint currently serves (empty on failure)."""
+    import httpx
+
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            r = client.get(
+                f"{base_url.rstrip('/')}/models",
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+        data = r.json().get("data", [])
+        return [m.get("id", "") for m in data]
+    except Exception:
+        return []

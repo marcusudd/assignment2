@@ -65,7 +65,7 @@ def _read_task_input(prompt: str) -> str | None:
 def _run_task(
     task: str,
     config,
-    local_backend,
+    local_backends,
     cloud_backend,
     system_prompt: str,
     verbose: bool,
@@ -93,7 +93,7 @@ def _run_task(
 
     orch = Orchestrator(
         config=config,
-        local_backend=local_backend,
+        local_backends=local_backends,
         cloud_backend=cloud_backend,
         cost_tracker=cost_tracker,
         registry=registry,
@@ -147,7 +147,7 @@ def main() -> None:
     Path(config.workspace_dir).mkdir(parents=True, exist_ok=True)
 
     from backends import resolve
-    local_backend, cloud_backend = resolve(config)
+    local_backends, cloud_backend = resolve(config)
 
     system_prompt = _load_system_prompt(config)
     verbose = not args.no_verbose
@@ -178,8 +178,8 @@ def main() -> None:
                 continue
 
             # Re-resolve backends so LM Studio coming online mid-session is detected.
-            local_backend, cloud_backend = resolve(config)
-            _run_task(task, config, local_backend, cloud_backend, system_prompt, verbose)
+            local_backends, cloud_backend = resolve(config)
+            _run_task(task, config, local_backends, cloud_backend, system_prompt, verbose)
             print()   # blank line before next prompt
     else:
         # ----------------------------------------------------------------
@@ -187,7 +187,7 @@ def main() -> None:
         # ----------------------------------------------------------------
         _run_task(
             " ".join(args.task),
-            config, local_backend, cloud_backend, system_prompt, verbose,
+            config, local_backends, cloud_backend, system_prompt, verbose,
         )
 
 

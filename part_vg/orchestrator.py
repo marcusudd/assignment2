@@ -45,14 +45,14 @@ class Orchestrator:
     def __init__(
         self,
         config: Config,
-        local_backend: BackendSpec,
+        local_backends: list[BackendSpec],
         cloud_backend: BackendSpec,
         cost_tracker: CostTracker,
         registry: StateRegistry,
         worker_system_prompt: str,
     ) -> None:
         self.config = config
-        self.local = local_backend
+        self.locals = local_backends      # 1 or 2 local slots (dual-local)
         self.cloud = cloud_backend
         self.cost_tracker = cost_tracker
         self.registry = registry
@@ -64,6 +64,20 @@ class Orchestrator:
         )
         self.plan: Plan | None = None
         self.routing_summary: str = ""
+        self._local_rr = 0     # round-robin cursor for local workers
+
+    def _backend_for(self, wp: WorkerPlan) -> BackendSpec:
+        """Map a worker's logical backend to a physical slot.
+
+        Cloud workers → the cloud spec. Local workers → round-robin across the
+        available local slots, so in dual-local mode two local workers land on
+        two different models and run truly in parallel.
+        """
+        if wp.backend_name == "cloud":
+            return self.cloud
+        spec = self.locals[self._local_rr % len(self.locals)]
+        self._local_rr += 1
+        return spec
 
     def run(self, task: str) -> str:
         """Top-level entry. Returns a plain-text result."""
@@ -84,7 +98,7 @@ class Orchestrator:
     # Mode 1 / 2 — single worker
     # ------------------------------------------------------------------
     def _run_single(self, wp: WorkerPlan) -> str:
-        backend = self.local if wp.backend_name == "local" else self.cloud
+        backend = self._backend_for(wp)
         agent = self._make_agent(wp, backend)
         try:
             return agent.run()
@@ -101,7 +115,7 @@ class Orchestrator:
         agents: dict[str, SubAgent] = {}
 
         for wp in workers:
-            backend = self.local if wp.backend_name == "local" else self.cloud
+            backend = self._backend_for(wp)
             agents[wp.worker_id] = self._make_agent(wp, backend)
 
         print(
@@ -161,9 +175,11 @@ class Orchestrator:
             )
         )
 
+        # Integrator always runs on cloud (it must reliably read all files,
+        # fix cross-refs, and debug tests to green).
         agent = SubAgent(
             plan=integration_wp,
-            local_backend=self.local,
+            active_backend=self.cloud,
             cloud_backend=self.cloud,
             cost_tracker=self.cost_tracker,
             registry=self.registry,
@@ -179,7 +195,7 @@ class Orchestrator:
     def _make_agent(self, wp: WorkerPlan, backend: BackendSpec) -> SubAgent:
         return SubAgent(
             plan=wp,
-            local_backend=self.local,
+            active_backend=backend,
             cloud_backend=self.cloud,
             cost_tracker=self.cost_tracker,
             registry=self.registry,

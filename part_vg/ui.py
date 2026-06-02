@@ -122,6 +122,52 @@ def _savings_panel(tracker: CostTracker, comparison_models: list[str]) -> Panel:
     )
 
 
+def _gantt_panel(states: list[WorkerState], width: int = 44) -> Panel:
+    """Show each worker as a bar on a shared timeline (VG.1 visual proof).
+
+    All bars are anchored to the earliest start_ts, so overlapping bars make
+    genuine parallelism obvious at a glance. Local workers against one LM Studio
+    instance show a stair-step (they queue); cloud workers and dual-local
+    workers overlap fully.
+    """
+    started = [s for s in states if s.start_ts is not None]
+    if not started:
+        return Panel("(waiting for workers to start…)", title="Parallel timeline",
+                     border_style="dim")
+
+    t0 = min(s.start_ts for s in started)
+    now = time.monotonic()
+    t_end = max((s.end_ts or now) for s in started)
+    span = max(t_end - t0, 0.001)   # avoid div-by-zero
+
+    bar_style = {
+        "done": "green", "running": "cyan", "error": "red", "aborted": "yellow",
+    }
+
+    rows: list[str] = []
+    for ws in states:
+        icon = _backend_icon(ws.backend)
+        if ws.start_ts is None:
+            rows.append(f"{ws.worker_id:<11} {icon}  [dim]pending[/dim]")
+            continue
+        start_off = (ws.start_ts - t0) / span
+        end_off = ((ws.end_ts or now) - t0) / span
+        lead = int(start_off * width)
+        length = max(int((end_off - start_off) * width), 1)
+        trail = width - lead - length
+        if trail < 0:
+            trail = 0
+        color = bar_style.get(ws.status, "white")
+        bar = (" " * lead) + f"[{color}]" + ("▰" * length) + f"[/{color}]" + ("·" * trail)
+        elapsed = ws.elapsed() or 0.0
+        rows.append(f"{ws.worker_id:<11} {icon} {bar} {ws.status:<8} {elapsed:5.1f}s")
+
+    axis = f"{'':<14}0s{' ' * (width - 6)}{span:4.0f}s"
+    body = "\n".join(rows) + "\n" + f"[dim]{axis}[/dim]"
+    return Panel(body, title="Parallel timeline (anchored to first start)",
+                 border_style="dim")
+
+
 def _log_panel(states: list[WorkerState], lines: int = 12) -> Panel:
     log_lines: list[str] = []
     for ws in states:
@@ -191,6 +237,7 @@ class Dashboard:
                 border_style="blue",
             ),
             _worker_table(states),
+            _gantt_panel(states),
             _cost_bar(self.cost_tracker),
             Panel(self.routing_summary, title="Router decision", border_style="dim"),
             _savings_panel(self.cost_tracker, self.comparison_models),

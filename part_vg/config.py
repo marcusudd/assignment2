@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 
 @dataclass
 class BackendConfig:
+    name: str          # "local-0", "local-1", "cloud"
     base_url: str
     api_key: str
     model: str
@@ -16,7 +17,7 @@ class BackendConfig:
 @dataclass
 class Config:
     openrouter_api_key: str
-    local: BackendConfig
+    locals: list[BackendConfig]      # 1 or 2 local backends (dual-local switch)
     cloud: BackendConfig
     router_model: str
     compaction_model: str
@@ -44,23 +45,55 @@ class Config:
                 "OPENROUTER_API_KEY not set. Copy .env.example to .env and fill it in."
             )
 
-        local_api_key = os.getenv("LOCAL_API_KEY", data["local"].get("api_key", "lm-studio"))
-        compaction_raw = data["compaction"]["model"]
+        # --- Model choices: .env wins, config.toml is a structural fallback ---
+        def _pick(env_key: str, *toml_path_keys: str, default: str = "") -> str:
+            val = os.getenv(env_key)
+            if val is not None and val.strip():
+                return val.strip()
+            node: object = data
+            for k in toml_path_keys:
+                if isinstance(node, dict) and k in node:
+                    node = node[k]
+                else:
+                    return default
+            return node if isinstance(node, str) else default
+
+        # --- Local backends (1 or 2) ---
+        local_base_url = _pick(
+            "LOCAL_BASE_URL", "local", "base_url",
+            default="http://localhost:1234/v1",
+        )
+        local_api_key = os.getenv("LOCAL_API_KEY", "lm-studio")
+        local_model_1 = _pick("LOCAL_MODEL", "local", "model")
+        local_model_2 = os.getenv("LOCAL_MODEL_2", "").strip()
+
+        locals_: list[BackendConfig] = [
+            BackendConfig("local-0", local_base_url, local_api_key, local_model_1)
+        ]
+        if local_model_2:
+            locals_.append(
+                BackendConfig("local-1", local_base_url, local_api_key, local_model_2)
+            )
+
+        cloud_base_url = _pick(
+            "CLOUD_BASE_URL", "cloud", "base_url",
+            default="https://openrouter.ai/api/v1",
+        )
 
         return cls(
             openrouter_api_key=openrouter_api_key,
-            local=BackendConfig(
-                base_url=data["local"]["base_url"],
-                api_key=local_api_key,
-                model=data["local"]["model"],
-            ),
+            locals=locals_,
             cloud=BackendConfig(
-                base_url=data["cloud"]["base_url"],
+                name="cloud",
+                base_url=cloud_base_url,
                 api_key=openrouter_api_key,
-                model=data["cloud"]["model"],
+                model=_pick("CLOUD_MODEL", "cloud", "model",
+                            default="anthropic/claude-sonnet-4-6"),
             ),
-            router_model=data["router"]["model"],
-            compaction_model=compaction_raw,
+            router_model=_pick("ROUTER_MODEL", "router", "model",
+                               default="openai/gpt-5-mini"),
+            compaction_model=_pick("COMPACTION_MODEL", "compaction", "model",
+                                   default="local"),
             compaction_token_threshold=data["compaction"]["token_threshold"],
             cost_cap_usd=data["cost"]["cap_usd"],
             cost_warning_threshold=data["cost"]["warning_threshold"],

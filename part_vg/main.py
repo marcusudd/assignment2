@@ -87,10 +87,12 @@ def _read_task_input(prompt: str) -> str | None:
     except (EOFError, KeyboardInterrupt):
         return None
     lines = [first]
-    # Drain lines that the terminal pre-buffered from a paste.
-    # 300 ms: wide enough for slow terminals/SSH, tight enough not to feel laggy.
+    # Drain lines from a paste. 1 s timeout: terminals batch paste chunks up to
+    # ~500 ms apart; going below that reliably splits multi-line pastes.
+    # Single-line input is unaffected — the 1 s wait only fires once, after the
+    # user presses Enter, which is indistinguishable from normal shell latency.
     while True:
-        ready, _, _ = select.select([sys.stdin], [], [], 0.30)
+        ready, _, _ = select.select([sys.stdin], [], [], 1.0)
         if not ready:
             break
         try:

@@ -34,13 +34,14 @@ def compact_if_needed(
     config: Config,
     cloud_base_url: str,
     cloud_api_key: str,
+    force: bool = False,
 ) -> bool:
     """
-    Compact the oldest turns in-place if the history exceeds the threshold.
-    Returns True if compaction ran, False otherwise.
+    Compact the oldest turns in-place if the history exceeds the threshold
+    (or if force=True). Returns True if compaction ran, False otherwise.
     """
     estimated = _estimate_tokens(history)
-    if estimated < config.compaction_token_threshold:
+    if not force and estimated < config.compaction_token_threshold:
         return False
 
     # Keep the most recent turns intact; summarise everything older.

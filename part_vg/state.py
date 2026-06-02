@@ -46,6 +46,18 @@ class StateRegistry:
         self._phase: str = "idle"
         self._routing_mode: int | None = None
         self._routing_summary: str = ""
+        self._force_compact = threading.Event()
+
+    def request_compact(self) -> None:
+        """Signal workers to compact on their next loop iteration."""
+        self._force_compact.set()
+
+    def should_compact(self) -> bool:
+        """Test-and-clear: returns True once, then resets."""
+        if self._force_compact.is_set():
+            self._force_compact.clear()
+            return True
+        return False
 
     def register(self, ws: WorkerState) -> None:
         with self._lock:

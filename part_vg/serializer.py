@@ -144,6 +144,10 @@ def build_payload(
     parallel_overlap = _workers_overlap(states)
     criteria = _derive_criteria(states, events, routing_mode, parallel_overlap)
 
+    fallback_detected = False
+    if routing_mode == 1:
+        fallback_detected = any(not w["is_local"] for w in worker_rows)
+
     return {
         "run_id": run_id,
         "task": task,
@@ -166,4 +170,5 @@ def build_payload(
         "events": events,
         "criteria": criteria,
         "parallel_overlap": parallel_overlap,
+        "fallback_detected": fallback_detected,
     }

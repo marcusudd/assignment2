@@ -189,6 +189,19 @@ def api_run(req: RunRequest) -> dict:
     return {"run_id": run_id}
 
 
+@app.post("/api/compact")
+def api_compact() -> dict:
+    with _run_lock:
+        holder = _current
+    if holder is None or not holder.get("running"):
+        raise HTTPException(status_code=400, detail="No active run to compact")
+    registry = holder.get("registry")
+    if registry is None:
+        raise HTTPException(status_code=400, detail="Registry not ready")
+    registry.request_compact()
+    return {"ok": True}
+
+
 @app.post("/api/reset")
 def api_reset() -> dict:
     global _current

@@ -7,6 +7,7 @@ export default function Header({
   onCapChange,
   onRun,
   onReset,
+  onCompact,
   busy,
   connected,
   cost,
@@ -90,6 +91,14 @@ export default function Header({
             className="rounded-lg bg-cyan-600 px-5 py-2.5 font-semibold text-white shadow-lg shadow-cyan-900/30 transition hover:bg-cyan-500 active:scale-[0.98] disabled:opacity-40"
           >
             ▶ Run
+          </button>
+          <button
+            type="button"
+            onClick={onCompact}
+            disabled={!running || isMock}
+            className="rounded-lg border border-amber-700/60 px-4 py-2.5 text-amber-300 transition hover:bg-amber-900/30 active:scale-[0.98] disabled:opacity-40"
+          >
+            Compact
           </button>
           <button
             type="button"

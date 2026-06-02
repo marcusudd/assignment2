@@ -111,11 +111,13 @@ class SubAgent:
                 self.registry.update(wid, status="aborted", current_action="aborted")
                 raise BudgetExceeded("Stop signal set by another worker or cap")
 
-            # Context engineering (VG.2, D6): compact history once it grows past
-            # the threshold. No-op for short-lived workers; the long-lived
-            # integrator session is where this actually fires.
+            # Context engineering (VG.2, D6): compact history when threshold
+            # exceeded OR when manually requested via UI button.
+            force = self.registry.should_compact()
             if compact_if_needed(
-                self.history, self.config, self._cloud.base_url, self._cloud.api_key
+                self.history, self.config,
+                self._cloud.base_url, self._cloud.api_key,
+                force=force,
             ):
                 self._log("🗜 compacted history (context engineering)")
 

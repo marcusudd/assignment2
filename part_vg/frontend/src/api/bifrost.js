@@ -34,6 +34,15 @@ export async function resetWorkspace() {
   return res.json();
 }
 
+export async function compactSession() {
+  const res = await fetch(`${API}/compact`, { method: "POST" });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `compact failed: ${res.status}`);
+  }
+  return res.json();
+}
+
 /**
  * Subscribe to live SSE snapshots. Returns a cleanup function.
  */

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import {
+  compactSession,
   fetchConfig,
   resetWorkspace,
   runTask,
@@ -61,6 +62,15 @@ export default function App() {
     }
   }, []);
 
+  const handleCompact = useCallback(async () => {
+    try {
+      await compactSession();
+      setStatus("Compaction requested — fires on next worker loop");
+    } catch (e) {
+      setStatus(e.message);
+    }
+  }, []);
+
   const workers = payload?.workers ?? [];
   const running = Boolean(payload?.running);
 
@@ -74,6 +84,7 @@ export default function App() {
           onCapChange={setCap}
           onRun={handleRun}
           onReset={handleReset}
+          onCompact={handleCompact}
           busy={busy}
           connected={connected}
           cost={payload?.cost}
@@ -83,7 +94,7 @@ export default function App() {
           running={running}
         />
 
-        <RouterBanner routing={payload?.routing} workers={workers} />
+        <RouterBanner routing={payload?.routing} workers={workers} fallbackDetected={payload?.fallback_detected} />
 
         <Timeline
           workers={workers}

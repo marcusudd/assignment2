@@ -10,11 +10,45 @@ Usage:
 All options can also be set via config.toml / .env.
 """
 import argparse
+import io
 import select
 import subprocess
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
+
+
+class _Tee(io.TextIOBase):
+    """Write to both a stream and a log file simultaneously."""
+
+    def __init__(self, stream: io.TextIOBase, log_file: io.TextIOBase) -> None:
+        self._stream = stream
+        self._log = log_file
+
+    def write(self, s: str) -> int:
+        self._stream.write(s)
+        self._log.write(s)
+        self._log.flush()
+        return len(s)
+
+    def flush(self) -> None:
+        self._stream.flush()
+        self._log.flush()
+
+
+def _open_log(task: str) -> tuple[Path, io.TextIOBase]:
+    """Open a timestamped log file; return (path, file handle)."""
+    log_dir = Path(__file__).parent / "logs"
+    log_dir.mkdir(exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_task = task[:40].replace(" ", "_").replace("/", "-")
+    log_path = log_dir / f"{ts}_{safe_task}.log"
+    fh = open(log_path, "w", encoding="utf-8")
+    fh.write(f"=== Bifrost session {ts} ===\n")
+    fh.write(f"Task: {task}\n\n")
+    fh.flush()
+    return log_path, fh
 
 
 def _load_system_prompt(config) -> str:
@@ -76,55 +110,91 @@ def _run_task(
     from state import StateRegistry
     from ui import Dashboard
 
-    prices_path = Path(__file__).parent / "model_prices.json"
-    cost_tracker = CostTracker(
-        cap_usd=config.cost_cap_usd,
-        warning_threshold=config.cost_warning_threshold,
-        prices_path=str(prices_path),
-    )
-    registry = StateRegistry()
+    log_path, log_fh = _open_log(task)
+    # Tee stderr to log — captures all [orchestrator]/[router]/[backends] messages
+    real_stderr = sys.stderr
+    sys.stderr = _Tee(real_stderr, log_fh)  # type: ignore[assignment]
 
-    dashboard = Dashboard(
-        task=task,
-        registry=registry,
-        cost_tracker=cost_tracker,
-        comparison_models=config.comparison_models,
-        verbose=verbose,
-    )
-
-    orch = Orchestrator(
-        config=config,
-        local_backends=local_backends,
-        cloud_backend=cloud_backend,
-        cost_tracker=cost_tracker,
-        registry=registry,
-        worker_system_prompt=system_prompt,
-    )
-
-    dashboard.start()
     try:
-        result = orch.run(task)
-        dashboard.set_routing_summary(orch.routing_summary)
-        time.sleep(0.5)
-    except KeyboardInterrupt:
-        result = "Interrupted."
+        prices_path = Path(__file__).parent / "model_prices.json"
+        cost_tracker = CostTracker(
+            cap_usd=config.cost_cap_usd,
+            warning_threshold=config.cost_warning_threshold,
+            prices_path=str(prices_path),
+        )
+        registry = StateRegistry()
+
+        dashboard = Dashboard(
+            task=task,
+            registry=registry,
+            cost_tracker=cost_tracker,
+            comparison_models=config.comparison_models,
+            verbose=verbose,
+        )
+
+        orch = Orchestrator(
+            config=config,
+            local_backends=local_backends,
+            cloud_backend=cloud_backend,
+            cost_tracker=cost_tracker,
+            registry=registry,
+            worker_system_prompt=system_prompt,
+        )
+
+        dashboard.start()
+        try:
+            result = orch.run(task)
+            dashboard.set_routing_summary(orch.routing_summary)
+            time.sleep(0.5)
+        except KeyboardInterrupt:
+            result = "Interrupted."
+        finally:
+            dashboard.stop()
+
+        print("\n" + "=" * 60)
+        print("Result:")
+        print(result)
+        print("=" * 60)
+
+        snap = cost_tracker.snapshot()
+        print(f"\nCost: ${snap['total_usd']:.4f} / ${snap['cap_usd']:.2f}")
+
+        cf = cost_tracker.counterfactual(config.comparison_models)
+        if cf:
+            print("\nAll-cloud comparison:")
+            for model, cost in sorted(cf.items(), key=lambda x: -x[1]):
+                saved = cost - snap["total_usd"]
+                print(f"  {model:<40} ${cost:.4f}  (saved ${saved:.4f})")
+
+        # Write structured summary + all worker logs to the log file
+        _write_log_summary(log_fh, task, result, snap, registry, orch.routing_summary)
+
     finally:
-        dashboard.stop()
+        sys.stderr = real_stderr
+        log_fh.close()
+        print(f"\n[log] {log_path}")
 
-    print("\n" + "=" * 60)
-    print("Result:")
-    print(result)
-    print("=" * 60)
 
-    snap = cost_tracker.snapshot()
-    print(f"\nCost: ${snap['total_usd']:.4f} / ${snap['cap_usd']:.2f}")
+def _write_log_summary(fh, task, result, snap, registry, routing) -> None:
+    fh.write("\n\n=== RESULT ===\n")
+    fh.write(result + "\n")
+    fh.write(f"\n=== COST ===\n")
+    fh.write(f"total: ${snap['total_usd']:.6f} / cap ${snap['cap_usd']:.2f}\n")
+    fh.write(f"routing: {routing}\n")
 
-    cf = cost_tracker.counterfactual(config.comparison_models)
-    if cf:
-        print("\nAll-cloud comparison:")
-        for model, cost in sorted(cf.items(), key=lambda x: -x[1]):
-            saved = cost - snap["total_usd"]
-            print(f"  {model:<40} ${cost:.4f}  (saved ${saved:.4f})")
+    fh.write("\n=== WORKER LOGS ===\n")
+    for ws in registry.snapshot():
+        elapsed = ws.elapsed()
+        elapsed_str = f"{elapsed:.1f}s" if elapsed else "-"
+        fh.write(
+            f"\n--- {ws.worker_id} ({ws.role}) "
+            f"backend={ws.backend} model={ws.model} "
+            f"status={ws.status} elapsed={elapsed_str} "
+            f"cost=${ws.cost_usd:.6f} ---\n"
+        )
+        for line in ws.log_lines:
+            fh.write(f"  {line}\n")
+    fh.flush()
 
 
 def main() -> None:

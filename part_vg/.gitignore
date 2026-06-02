@@ -9,4 +9,6 @@ workspace/*
 !workspace/.gitkeep
 sessions/*
 !sessions/.gitkeep
+logs/*
+!logs/.gitkeep
 demo.txt

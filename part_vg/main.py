@@ -50,9 +50,10 @@ def _read_task_input(prompt: str) -> str | None:
     except (EOFError, KeyboardInterrupt):
         return None
     lines = [first]
-    # Drain any extra lines that the terminal pre-buffered from a paste.
+    # Drain lines that the terminal pre-buffered from a paste.
+    # 300 ms: wide enough for slow terminals/SSH, tight enough not to feel laggy.
     while True:
-        ready, _, _ = select.select([sys.stdin], [], [], 0.05)
+        ready, _, _ = select.select([sys.stdin], [], [], 0.30)
         if not ready:
             break
         try:

@@ -43,6 +43,9 @@ class StateRegistry:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._states: dict[str, WorkerState] = {}
+        self._phase: str = "idle"
+        self._routing_mode: int | None = None
+        self._routing_summary: str = ""
 
     def register(self, ws: WorkerState) -> None:
         with self._lock:
@@ -71,3 +74,23 @@ class StateRegistry:
     def clear(self) -> None:
         with self._lock:
             self._states.clear()
+            self._phase = "idle"
+            self._routing_mode = None
+            self._routing_summary = ""
+
+    def set_phase(self, phase: str) -> None:
+        with self._lock:
+            self._phase = phase
+
+    def get_phase(self) -> str:
+        with self._lock:
+            return self._phase
+
+    def set_routing(self, mode: int, summary: str) -> None:
+        with self._lock:
+            self._routing_mode = mode
+            self._routing_summary = summary
+
+    def get_routing(self) -> tuple[int | None, str]:
+        with self._lock:
+            return self._routing_mode, self._routing_summary

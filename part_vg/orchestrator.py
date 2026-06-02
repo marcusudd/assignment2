@@ -81,23 +81,32 @@ class Orchestrator:
 
     def run(self, task: str) -> str:
         """Top-level entry. Returns a plain-text result."""
+        self.registry.set_phase("routing")
         self.plan = self.router.plan(task)
         self.routing_summary = (
             f"Mode {self.plan.mode}: {self.plan.reasoning} "
             f"({len(self.plan.workers)} worker(s))"
         )
+        self.registry.set_routing(self.plan.mode, self.routing_summary)
         print(f"[orchestrator] {self.routing_summary}", file=sys.stderr)
 
         if self.plan.mode == 1:
-            return self._run_single(self.plan.workers[0])
+            result = self._run_single(self.plan.workers[0])
+            self.registry.set_phase("done")
+            return result
         if self.plan.mode == 2:
-            return self._run_single(self.plan.workers[0])
-        return self._run_fanout(self.plan)
+            result = self._run_single(self.plan.workers[0])
+            self.registry.set_phase("done")
+            return result
+        result = self._run_fanout(self.plan)
+        self.registry.set_phase("done")
+        return result
 
     # ------------------------------------------------------------------
     # Mode 1 / 2 — single worker
     # ------------------------------------------------------------------
     def _run_single(self, wp: WorkerPlan) -> str:
+        self.registry.set_phase("fanout")
         backend = self._backend_for(wp)
         agent = self._make_agent(wp, backend)
         try:
@@ -123,6 +132,7 @@ class Orchestrator:
             file=sys.stderr,
         )
 
+        self.registry.set_phase("fanout")
         with ThreadPoolExecutor(max_workers=n) as executor:
             future_to_id = {
                 executor.submit(agents[wp.worker_id].run): wp.worker_id
@@ -141,6 +151,7 @@ class Orchestrator:
             return "Run aborted: budget cap reached during parallel execution."
 
         # Integration pass — uses results and modifies files (D8, VG.1 substance)
+        self.registry.set_phase("integration")
         return self._integration_pass(plan, results)
 
     # ------------------------------------------------------------------
@@ -164,19 +175,9 @@ class Orchestrator:
             owned_files=[],       # integrator may edit any file
             backend_name="cloud",
         )
-        # Register a state entry for the integrator so the UI shows it
-        self.registry.register(
-            WorkerState(
-                worker_id="integration",
-                role="integrator",
-                task_summary="Integration + test pass",
-                backend=self.cloud.name,
-                model=self.cloud.model,
-            )
-        )
 
-        # Integrator always runs on cloud (it must reliably read all files,
-        # fix cross-refs, and debug tests to green).
+        # SubAgent.__init__ registers its own WorkerState entry with the
+        # registry, so no manual register needed here.
         agent = SubAgent(
             plan=integration_wp,
             active_backend=self.cloud,

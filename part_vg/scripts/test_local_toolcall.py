@@ -1,26 +1,22 @@
 """
-Build step 0 — verify that the local LM Studio model supports tool-calling.
+Build step 0 — verify local LM Studio models support tool-calling.
 
 Run from part_vg/:
-  python scripts/test_local_toolcall.py
+  PYTHONPATH=. python scripts/test_local_toolcall.py
 
-What it checks:
-  1. Local endpoint reachable (health check)
-  2. Model returns a tool_call (not just text) for a simple prompt
-  3. Tool arguments are valid JSON with the right fields
-  4. Dispatching the tool actually works
-
-Pass = Bifrost's local routing is safe to build on.
-Fail = switch model in config.toml (try Qwen-coder or Gemma 4 26B) before continuing.
+Tests LOCAL_MODEL always, and LOCAL_MODEL_2 when set in .env.
+Pass = safe to demo dual-local + Bifrost local routing.
 """
 import json
+import os
 import sys
+import tempfile
 from pathlib import Path
 
-# Make sure we can import from parent
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from dotenv import load_dotenv
+
 load_dotenv(".env")
 
 from config import Config
@@ -28,44 +24,27 @@ from llm import call_llm, health_check
 from tools import TOOL_SCHEMAS, dispatch_tool
 
 
-def main() -> None:
+def _load_config() -> Config:
     try:
-        cfg = Config.load("config.toml")
-    except ValueError as e:
-        print(f"[SKIP] Config error (no OPENROUTER_API_KEY needed for local test): {e}")
-        # Allow running without OPENROUTER_API_KEY for local-only test
-        import os
+        return Config.load("config.toml")
+    except ValueError:
         os.environ.setdefault("OPENROUTER_API_KEY", "not-needed-for-local-test")
-        cfg = Config.load("config.toml")
+        return Config.load("config.toml")
 
-    base_url = cfg.local.base_url
-    api_key  = cfg.local.api_key
-    model    = cfg.local.model
 
-    print(f"Target: {base_url}  model={model}")
-    print()
+def _models_to_test(cfg: Config) -> list[tuple[str, str]]:
+    """Return (label, model_id) for each local slot to probe."""
+    out: list[tuple[str, str]] = [(cfg.locals[0].name, cfg.locals[0].model)]
+    if len(cfg.locals) > 1:
+        out.append((cfg.locals[1].name, cfg.locals[1].model))
+    return out
 
-    # ------------------------------------------------------------------
-    # Step 1: health check
-    # ------------------------------------------------------------------
-    print("1. Health check...", end=" ", flush=True)
-    if not health_check(base_url, api_key):
-        print("FAIL")
-        print(f"\n   Cannot reach {base_url}")
-        print("   → Make sure LM Studio is running and the local server is enabled (port 1234).")
-        sys.exit(1)
-    print("OK")
 
-    # ------------------------------------------------------------------
-    # Step 2: simple tool-call probe
-    # ------------------------------------------------------------------
-    print("2. Tool-call probe...", end=" ", flush=True)
+def _probe_model(base_url: str, api_key: str, model: str) -> None:
     messages = [
         {
             "role": "user",
-            "content": (
-                "Use the bash tool to run: echo 'tool-calling-works'"
-            ),
+            "content": "Use the bash tool to run: echo 'tool-calling-works'",
         }
     ]
 
@@ -79,68 +58,76 @@ def main() -> None:
     )
 
     if response is None:
-        print("FAIL")
-        print("\n   LLM call returned None — the model may not be loaded.")
-        print("   → Load Qwen 3.6 27B (or another model) in LM Studio and try again.")
-        sys.exit(1)
+        raise RuntimeError("LLM call returned None — model may not be loaded")
 
     msg = response.choices[0].message
     finish_reason = response.choices[0].finish_reason
-
-    # Normalize (same logic as subagent.py)
     if msg.tool_calls:
         finish_reason = "tool_calls"
 
     if finish_reason != "tool_calls" or not msg.tool_calls:
-        print("FAIL — model responded with text instead of a tool call")
-        print(f"\n   finish_reason: {finish_reason!r}")
-        print(f"   content: {str(msg.content)[:200]}")
-        print()
-        print("   → The model does not support tool-calling reliably.")
-        print("   → Try: Qwen3-8B-Instruct, Qwen2.5-Coder-7B, or Gemma 4 26B in LM Studio.")
-        print("   → Or: the cascade-fallback stretch feature will cover this gap.")
-        sys.exit(1)
+        raise RuntimeError(
+            f"no tool_call (finish_reason={finish_reason!r}, "
+            f"content={str(msg.content)[:120]!r})"
+        )
 
-    print("OK")
-
-    # ------------------------------------------------------------------
-    # Step 3: parse tool arguments
-    # ------------------------------------------------------------------
-    print("3. Argument JSON valid...", end=" ", flush=True)
     tc = msg.tool_calls[0]
-    tool_name = tc.function.name
-    try:
-        args = json.loads(tc.function.arguments or "{}")
-    except json.JSONDecodeError as e:
+    args = json.loads(tc.function.arguments or "{}")
+    ws = tempfile.mkdtemp(prefix="bifrost_test_")
+    result = dispatch_tool(
+        tc.function.name, args, workspace_dir=ws, max_output=500, auto_approve=True
+    )
+    if "ERROR" in result[:20]:
+        raise RuntimeError(f"dispatch failed: {result[:200]}")
+
+    print(f"      tokens: prompt={prompt_tok} completion={completion_tok}")
+    print(f"      tool={tc.function.name!r}  output={result[:80]!r}")
+
+
+def main() -> None:
+    cfg = _load_config()
+    base_url = cfg.locals[0].base_url
+    api_key = cfg.locals[0].api_key
+    models = _models_to_test(cfg)
+
+    print(f"Endpoint: {base_url}")
+    print(f"Models to test: {', '.join(m for _, m in models)}")
+    print()
+
+    print("1. Health check...", end=" ", flush=True)
+    if not health_check(base_url, api_key):
         print("FAIL")
-        print(f"\n   Model emitted malformed JSON: {tc.function.arguments!r}")
-        print(f"   Parse error: {e}")
-        print()
-        print("   → Minimal escalate-on-error (D4) will handle this at runtime,")
-        print("     but consider switching to a more reliable model.")
+        print(f"\n   Cannot reach {base_url}")
+        print("   → Start LM Studio and enable the local server (port 1234).")
         sys.exit(1)
     print("OK")
-    print(f"   tool={tool_name!r}  args={args}")
-
-    # ------------------------------------------------------------------
-    # Step 4: actually dispatch the tool
-    # ------------------------------------------------------------------
-    print("4. Tool dispatch...", end=" ", flush=True)
-    import tempfile, os
-    ws = tempfile.mkdtemp(prefix="bifrost_test_")
-    result = dispatch_tool(tool_name, args, workspace_dir=ws, max_output=500, auto_approve=True)
-    print("OK")
-    print(f"   output: {result[:100]}")
-
-    # ------------------------------------------------------------------
-    # Summary
-    # ------------------------------------------------------------------
     print()
+
+    failed = False
+    for label, model in models:
+        print(f"── {label}: {model!r} ──")
+        print("   Tool-call probe...", end=" ", flush=True)
+        try:
+            _probe_model(base_url, api_key, model)
+            print("OK")
+        except Exception as e:
+            print("FAIL")
+            print(f"   {e}")
+            if "gemma-4-e4b" in model:
+                print("   → Load gemma-4-e4b in LM Studio (dual-local demo slot).")
+            else:
+                print("   → Load the model in LM Studio or pick another in .env.")
+            failed = True
+        print()
+
     print("=" * 50)
-    print("✅  ALL CHECKS PASSED")
-    print(f"    Model {model!r} supports tool-calling.")
-    print(f"    Bifrost's local routing is safe to build on.")
-    print(f"    Tokens used: prompt={prompt_tok}  completion={completion_tok}")
+    if failed:
+        print("❌  SOME CHECKS FAILED — fix before live demo")
+        sys.exit(1)
+    print("✅  ALL LOCAL MODELS PASSED")
+    print("    Bifrost local routing is ready.")
+    if len(models) > 1:
+        print("    Dual-local: two models verified for parallel local workers.")
     print("=" * 50)
 
 

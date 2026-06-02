@@ -1,19 +1,45 @@
 services:
+  # Web GUI + API (default) — open http://localhost:8000
   bifrost:
     build: .
     image: bifrost:latest
+    ports:
+      - "8000:8000"
     env_file:
-      - .env                    # OPENROUTER_API_KEY (git-ignored, never committed)
+      - .env
     environment:
-      # Reachable from inside the container to LM Studio on the host (H2)
       LOCAL_BASE_URL: http://host.docker.internal:1234/v1
-      AUTO_APPROVE: "true"      # D14: container sandbox is the guard
+      AUTO_APPROVE: "true"
     volumes:
-      - ./workspace:/app/workspace   # persist workspace between runs
-      - ./sessions:/app/sessions     # persist chat sessions (HG-2)
-    # Pass a task at runtime:
-    #   docker compose run bifrost "Add /orders endpoint"
-    # Or override cap:
-    #   docker compose run bifrost --cap 0.05 "List all Python files"
+      - ./workspace:/app/workspace
+      - ./logs:/app/logs
+      - ./sessions:/app/sessions
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # Terminal TUI (fallback, no browser)
+  bifrost-cli:
+    profiles: ["cli"]
+    build: .
+    image: bifrost:latest
+    env_file:
+      - .env
+    environment:
+      LOCAL_BASE_URL: http://host.docker.internal:1234/v1
+      AUTO_APPROVE: "true"
+    volumes:
+      - ./workspace:/app/workspace
+      - ./logs:/app/logs
+      - ./sessions:/app/sessions
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     stdin_open: true
     tty: true
+    entrypoint: ["python", "main.py"]
+    # docker compose --profile cli run --rm bifrost-cli "List Python files"

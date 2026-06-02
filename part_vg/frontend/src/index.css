@@ -1,0 +1,89 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply antialiased;
+    background-image:
+      radial-gradient(ellipse 80% 50% at 50% -20%, rgb(34 211 238 / 0.12), transparent),
+      radial-gradient(ellipse 60% 40% at 100% 100%, rgb(139 92 246 / 0.08), transparent);
+  }
+}
+
+@layer utilities {
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(71 85 105) transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 6px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: rgb(71 85 105);
+    border-radius: 3px;
+  }
+}
+
+@keyframes bar-shimmer {
+  0% {
+    opacity: 0.75;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0.75;
+  }
+}
+
+@keyframes criteria-pop {
+  0% {
+    transform: scale(0.92);
+    opacity: 0.6;
+  }
+  60% {
+    transform: scale(1.04);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+@keyframes feed-slide {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pulse-ring {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgb(34 211 238 / 0.35);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgb(34 211 238 / 0);
+  }
+}
+
+.animate-bar-shimmer {
+  animation: bar-shimmer 1.6s ease-in-out infinite;
+}
+
+.animate-criteria-pop {
+  animation: criteria-pop 0.45s ease-out;
+}
+
+.animate-feed-in {
+  animation: feed-slide 0.35s ease-out;
+}
+
+.animate-pulse-ring {
+  animation: pulse-ring 2s ease-in-out infinite;
+}

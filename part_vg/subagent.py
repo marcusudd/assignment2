@@ -221,7 +221,12 @@ class SubAgent:
         model_short = self._active.model.split("/")[-1][:16]
         human_action = self._human_action(name, inputs, model_short)
         self.registry.update(self.plan.worker_id, current_action=human_action)
-        self._log(f"▶ {name}: {self._fmt_inputs(name, inputs)}")
+        if name == "edit_file":
+            tag = "create" if not inputs.get("old_str", "") else "section-edit"
+            detail = f"{self._fmt_inputs(name, inputs)} [{tag}]"
+        else:
+            detail = self._fmt_inputs(name, inputs)
+        self._log(f"▶ {name}: {detail}")
 
         result = dispatch_tool(
             name,

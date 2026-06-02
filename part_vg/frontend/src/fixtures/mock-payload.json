@@ -1,0 +1,102 @@
+{
+  "run_id": "mock01",
+  "task": "Add /orders resource (mock fixture)",
+  "running": true,
+  "phase": "fanout",
+  "routing": {
+    "mode": 3,
+    "summary": "Mode 3: decomposed into 4 parallel agents (2L / 2C)"
+  },
+  "parallel_overlap": true,
+  "workers": [
+    {
+      "id": "w1",
+      "role": "coder",
+      "backend": "local-0",
+      "model": "gemma-4-e4b",
+      "status": "running",
+      "action": "gemma: creating models/order.py",
+      "tokens": 420,
+      "cost": 0,
+      "start": 0,
+      "end": 8.2,
+      "is_local": true
+    },
+    {
+      "id": "w2",
+      "role": "coder",
+      "backend": "local-1",
+      "model": "gemma-4-26b-a4b-it-mlx",
+      "status": "running",
+      "action": "gemma: creating schemas/order.py",
+      "tokens": 310,
+      "cost": 0,
+      "start": 0.1,
+      "end": 7.5,
+      "is_local": true
+    },
+    {
+      "id": "w3",
+      "role": "coder",
+      "backend": "cloud",
+      "model": "anthropic/claude-sonnet-4-6",
+      "status": "running",
+      "action": "sonnet: editing routers/orders.py",
+      "tokens": 1200,
+      "cost": 0.042,
+      "start": 0.2,
+      "end": 9.1,
+      "is_local": false
+    },
+    {
+      "id": "w4",
+      "role": "coder",
+      "backend": "cloud",
+      "model": "anthropic/claude-sonnet-4-6",
+      "status": "running",
+      "action": "sonnet: $ python3 -m pytest -x -q",
+      "tokens": 890,
+      "cost": 0.031,
+      "start": 1.0,
+      "end": 8.8,
+      "is_local": false
+    }
+  ],
+  "cost": {
+    "total": 0.073,
+    "cap": 0.2,
+    "fraction": 0.365,
+    "warning": false,
+    "stopped": false
+  },
+  "savings": [
+    {
+      "model": "anthropic/claude-opus-4-8",
+      "would_cost": 1.2,
+      "saved": 1.127
+    }
+  ],
+  "events": [
+    {
+      "kind": "action",
+      "text": "▶ edit_file: models/order.py [create]",
+      "worker": "w1"
+    },
+    {
+      "kind": "blocked",
+      "text": "← BLOCKED (recursive delete). Revise and try again.",
+      "worker": "w4"
+    }
+  ],
+  "criteria": {
+    "VG.1": true,
+    "VG.2": false,
+    "VG.3": true,
+    "VG.4": true,
+    "VG.5": true,
+    "VG.6": false,
+    "VG.7": true,
+    "VG.8": true,
+    "VG.9": false
+  }
+}

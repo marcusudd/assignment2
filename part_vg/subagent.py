@@ -63,11 +63,13 @@ class SubAgent:
         self.history: list[dict] = []
         self._escalated = False
         self._failed_calls = 0
+        self._chaining_blocks = 0
 
         ws = WorkerState(
             worker_id=plan.worker_id,
             role=plan.role,
             task_summary=plan.task[:60],
+            owned_files=list(plan.owned_files),
             backend=self._active.name,
             model=self._active.model,
         )
@@ -120,6 +122,9 @@ class SubAgent:
                 force=force,
             ):
                 self._log("🗜 compacted history (context engineering)")
+                # Clear only after a real compaction so a forced no-op on a
+                # short-lived worker doesn't swallow the manual request.
+                self.registry.clear_compact()
 
             model_short = self._active.model.split("/")[-1][:20]
             self.registry.update(
@@ -237,6 +242,19 @@ class SubAgent:
             max_output=self.config.max_output,
             auto_approve=True,   # D14: AUTO_APPROVE in container
         )
+        if (
+            name == "bash"
+            and result.startswith("BLOCKED")
+            and "command chaining" in result
+        ):
+            self._chaining_blocks += 1
+            if self._chaining_blocks >= 2:
+                result += (
+                    "\n\nYou have repeated blocked cd/&& commands. "
+                    "Use one command only, cwd is already the workspace."
+                )
+        else:
+            self._chaining_blocks = 0
         self._log(f"← {result[:120]}")
         return result
 
@@ -259,7 +277,7 @@ class SubAgent:
             files_note = (
                 f"\n\nCreate ONLY these files: {', '.join(self.plan.owned_files)}\n"
                 "Write complete, working code immediately using edit_file "
-                "(old_str='' creates a new file). Do NOT explore the workspace "
+                "(old_str must be a string; use old_str='' to create a new file). Do NOT explore the workspace "
                 "or list files first — you already know your task. You may "
                 "read_file ONLY if you need to see an existing model/schema to "
                 "import from. Finish in as few steps as possible."

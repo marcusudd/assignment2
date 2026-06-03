@@ -34,9 +34,12 @@ TOOL_SCHEMAS = [
         "function": {
             "name": "bash",
             "description": (
-                "Run a single bash command in the workspace. "
-                "No chaining with ;, &&, ||, |, or &. "
-                "Output is capped — if truncated, use more targeted commands."
+                "Run ONE bash command. The process cwd is ALREADY the workspace "
+                "root — never prefix with cd or use &&, ||, ;, |, &. "
+                "No pipes (| head, | grep). No command chains with &&. "
+                "Good: python3 -m pytest tests/test_x.py -x -q. "
+                "Bad: cd workspace && python3 .... Bad: find . | head. "
+                "Output is capped — use targeted commands."
             ),
             "parameters": {
                 "type": "object",
@@ -88,7 +91,16 @@ def tool_bash(
 ) -> str:
     reason = security_check(command, workspace_dir)
     if reason:
-        return f"BLOCKED ({reason}). Revise and try again."
+        msg = f"BLOCKED ({reason}). Do not repeat this command shape."
+        if reason == "command chaining":
+            ws = Path(workspace_dir).resolve()
+            msg += (
+                f" Shell cwd is already {ws}. "
+                "Run a single command with a relative path, e.g. "
+                f"'python3 -m pytest tests/ -x -q' or 'python3 wordle.py' — "
+                "no cd, no &&, no pipes (|), no head/grep chains."
+            )
+        return msg
     if not auto_approve:
         print(f"\n🔧 bash: {command}")
         answer = input("   Execute? (y/n): ").strip().lower()

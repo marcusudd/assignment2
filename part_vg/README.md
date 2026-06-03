@@ -1,7 +1,7 @@
 # Bifrost
 
 Local-first hybrid coding agent with a **live web dashboard**: parallel workers,
-cost transparency, VG criteria lighting up as they happen, and `docker compose up`
+cost transparency with a hard budget cap, live activity feed, and `docker compose up`
 for graders (VG.7).
 
 - **Web GUI** — React + Vite + Tailwind at http://localhost:8000  
@@ -12,15 +12,28 @@ for graders (VG.7).
 
 ## Quick start (Docker — recommended)
 
+Everything (React UI + FastAPI + orchestrator) runs in one container. The image
+builds the frontend inside Docker — no local `npm install` required.
+
 ```bash
 cd part_vg
 cp .env.example .env
-# Edit .env — set OPENROUTER_API_KEY (required for cloud routing)
+# Edit .env — set OPENROUTER_API_KEY (required for live agent runs)
 
-docker compose up --build
+bash scripts/docker-up.sh
+# or: docker compose up --build
 ```
 
-Open **http://localhost:8000**, enter a task, click **Run**.
+Open **http://localhost:8000**, enter a task, click **Kör**.
+
+**UI-only rehearsal** (no API keys, animated mock workers):
+
+```bash
+bash scripts/docker-up.sh --mock
+# or: BIFROST_MOCK=true docker compose up --build
+```
+
+After frontend changes, rebuild: `docker compose up --build` (or the script above).
 
 LM Studio on the host (optional but recommended for cheap local workers):
 
@@ -86,11 +99,18 @@ Full rehearsal script: **[DEMO.md](DEMO.md)**
 
 | Command | Purpose |
 |---------|---------|
-| `docker compose up` | Web GUI on port **8000** (default) |
+| `bash scripts/docker-up.sh` | Build + start web GUI on **:8000** (live backend) |
+| `bash scripts/docker-up.sh --mock` | Same UI, mock SSE (no LLM keys needed) |
+| `docker compose up --build` | Equivalent to `docker-up.sh` |
+| `BIFROST_MOCK=true docker compose up --build` | Mock stream only |
 | `docker compose --profile cli run --rm bifrost-cli "task"` | Terminal agent (Rich TUI) |
 | `docker compose --profile cli run --rm -it bifrost-cli -i` | Interactive REPL |
 
 Volumes: `./workspace`, `./logs`, `./sessions` persist on the host.
+
+**Log files** (debugging): see [`logs/README.md`](logs/README.md). Each run writes
+`logs/YYYYMMDD_HHMMSS_<runid>_<task>.log`; `logs/server.log` holds API/orchestrator
+errors. List via `GET /api/logs` or `ls -lt logs/*.log`.
 
 ---
 
@@ -163,7 +183,7 @@ Web UI reads the same `StateRegistry` snapshot as the Rich TUI — orchestration
 ```
 part_vg/
 ├── server.py          # FastAPI + SSE
-├── serializer.py      # Registry → JSON (+ VG criteria)
+├── serializer.py      # Registry → JSON (live SSE snapshot)
 ├── orchestrator.py    # Parallel fan-out + integration
 ├── main.py / ui.py    # Terminal fallback
 ├── frontend/          # React dashboard
@@ -183,12 +203,12 @@ part_vg/
 |----|----------------|
 | VG.1 | Timeline overlap (mode 3, ≥2 workers) |
 | VG.2 | Activity feed compaction event |
-| VG.3 | Cost panel + warning / hard stop |
-| VG.4 | BLOCKED bash in feed + criteria |
+| VG.3 | Cost badge + warning tint + "budget hit — stopped" banner |
+| VG.4 | BLOCKED bash in feed |
 | VG.5 | Bash actions on timeline |
 | VG.6 | `edit_file` with `[section-edit]` |
 | VG.7 | `docker compose up` |
 | VG.8 | `config.toml` + `.env` / `.env.example` |
 | VG.9 | Workers yield after tool rounds |
 
-Criteria strip at the bottom lights up as each is satisfied during a run.
+Each row shows up live in the dashboard as a run progresses.

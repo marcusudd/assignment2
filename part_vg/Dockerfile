@@ -24,6 +24,7 @@ COPY config.toml model_prices.json .env.example ./
 COPY *.py ./
 COPY config/ config/
 COPY scripts/ scripts/
+COPY fixtures/ fixtures/
 COPY --from=frontend-build /build/frontend/dist ./frontend/dist
 
 RUN mkdir -p workspace logs sessions \

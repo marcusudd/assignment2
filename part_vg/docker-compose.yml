@@ -10,6 +10,7 @@ services:
     environment:
       LOCAL_BASE_URL: http://host.docker.internal:1234/v1
       AUTO_APPROVE: "true"
+      BIFROST_MOCK: ${BIFROST_MOCK:-}
     volumes:
       - ./workspace:/app/workspace
       - ./logs:/app/logs

@@ -57,3 +57,7 @@ def test_resolve_path_traversal():
     ws = Path(WS)
     assert resolve_path("../etc/passwd", WS) is None
     assert resolve_path("subdir/file.py", WS) is not None
+
+
+def test_pipe_chaining_blocked():
+    assert security_check("find . -name '*.py' | head", WS) is not None

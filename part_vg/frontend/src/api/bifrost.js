@@ -8,8 +8,12 @@ export async function fetchConfig() {
   return res.json();
 }
 
-export async function runTask(task, cap) {
-  const body = { task };
+export async function runTask(task, cap, realms = {}) {
+  const body = {
+    task,
+    allow_local: realms.allowLocal !== false,
+    allow_cloud: realms.allowCloud !== false,
+  };
   if (cap != null && cap !== "") {
     body.cap = Number(cap);
   }
@@ -43,9 +47,6 @@ export async function compactSession() {
   return res.json();
 }
 
-/**
- * Subscribe to live SSE snapshots. Returns a cleanup function.
- */
 export function subscribeEvents(onMessage, onError) {
   const source = new EventSource(`${API}/events`);
 

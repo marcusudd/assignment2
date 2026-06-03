@@ -36,4 +36,5 @@ echo
 
 echo "=== All automated checks passed ==="
 echo "Next: docker compose up  →  http://localhost:8000"
-echo "Mock UI (no backend): cd frontend && npm run dev:mock"
+echo "Docker mock UI: bash scripts/docker-up.sh --mock  →  http://localhost:8000"
+echo "Local mock UI: cd frontend && npm run dev:mock"

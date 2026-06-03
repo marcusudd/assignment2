@@ -68,17 +68,16 @@ def compact_if_needed(
     )
 
     # Use the compaction model (local if available, else cloud)
-    if config.compaction_model == "local":
-        from backends import resolve
+    if config.compaction_model == "local" and config.locals:
         # We only have config here; re-check health inline for simplicity
         from llm import health_check
-        from config import BackendConfig
 
-        local_alive = health_check(config.local.base_url, config.local.api_key)
+        local = config.locals[0]
+        local_alive = health_check(local.base_url, local.api_key)
         if local_alive:
-            comp_url = config.local.base_url
-            comp_key = config.local.api_key
-            comp_model = config.local.model
+            comp_url = local.base_url
+            comp_key = local.api_key
+            comp_model = local.model
         else:
             comp_url = cloud_base_url
             comp_key = cloud_api_key
@@ -86,7 +85,13 @@ def compact_if_needed(
     else:
         comp_url = cloud_base_url
         comp_key = cloud_api_key
-        comp_model = config.compaction_model
+        # "local" with no local backends → fall back to the cheap router model,
+        # never send the literal "local" as a model name.
+        comp_model = (
+            config.router_model
+            if config.compaction_model == "local"
+            else config.compaction_model
+        )
 
     response, _, _ = call_llm(
         messages=[

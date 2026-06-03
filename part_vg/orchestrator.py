@@ -30,10 +30,13 @@ have each written one file. Your job:
 1. Read every file listed in the task using read_file.
 2. Fix any cross-file reference errors (wrong import names, missing
    registrations, type mismatches between schemas and routers).
+   If a worker listed schemas/*.py but that file is missing, create it first.
 3. Register any new routers/modules in the app's main entry point
    (e.g. app.include_router(...) in main.py).
-4. Run the test suite with bash: python3 -m pytest -x -q 2>/dev/null
-   (NEVER use pipes like | head — they are blocked. Output is auto-capped.)
+4. Run the test suite with bash: python3 -m pytest tests/ -x -q
+   Bash rules: ONE command, no |, no &&, no ||, no ; .
+   NEVER: test -f file && echo, cmd || echo, ls file 2>/dev/null || echo.
+   Use read_file to check if a path exists.
 5. If tests fail, apply the minimal fix to make them pass and re-run.
 6. Reply with a short summary: what you fixed and whether tests passed.
 
@@ -50,6 +53,9 @@ class Orchestrator:
         cost_tracker: CostTracker,
         registry: StateRegistry,
         worker_system_prompt: str,
+        *,
+        allow_local: bool = True,
+        allow_cloud: bool = True,
     ) -> None:
         self.config = config
         self.locals = local_backends      # 1 or 2 local slots (dual-local)
@@ -57,6 +63,8 @@ class Orchestrator:
         self.cost_tracker = cost_tracker
         self.registry = registry
         self.worker_system_prompt = worker_system_prompt
+        self.allow_local = allow_local
+        self.allow_cloud = allow_cloud
         self.router = Router(
             config=config,
             cloud_base_url=cloud_backend.base_url,
@@ -66,18 +74,26 @@ class Orchestrator:
         self.routing_summary: str = ""
         self._local_rr = 0     # round-robin cursor for local workers
 
+    def _pick_local_slot(self) -> BackendSpec:
+        """Prefer a true local slot; fall back to first entry if H2 cloud proxy."""
+        local_only = [s for s in self.locals if s.is_local]
+        pool = local_only if local_only else self.locals
+        spec = pool[self._local_rr % len(pool)]
+        self._local_rr += 1
+        return spec
+
     def _backend_for(self, wp: WorkerPlan) -> BackendSpec:
         """Map a worker's logical backend to a physical slot.
 
-        Cloud workers → the cloud spec. Local workers → round-robin across the
-        available local slots, so in dual-local mode two local workers land on
-        two different models and run truly in parallel.
+        Realm toggles (UI) remap workers only — router decomposition still uses cloud.
         """
-        if wp.backend_name == "cloud":
-            return self.cloud
-        spec = self.locals[self._local_rr % len(self.locals)]
-        self._local_rr += 1
-        return spec
+        if wp.backend_name == "local":
+            if not self.allow_local:
+                return self.cloud
+            return self._pick_local_slot()
+        if not self.allow_cloud:
+            return self._pick_local_slot()
+        return self.cloud
 
     def run(self, task: str) -> str:
         """Top-level entry. Returns a plain-text result."""
@@ -169,7 +185,7 @@ class Orchestrator:
         )
 
         integration_wp = WorkerPlan(
-            worker_id="integration",
+            worker_id="asgard.integration",
             role="integrator",
             task=task,
             owned_files=[],       # integrator may edit any file

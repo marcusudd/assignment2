@@ -19,6 +19,7 @@ from pathlib import Path
 from config import Config
 from llm import call_llm
 from subagent import WorkerPlan
+from worker_ids import assign_worker_id
 
 # Patterns that reliably indicate a simple, read-only or single-file task
 _SIMPLE_RE = re.compile(
@@ -50,9 +51,11 @@ JSON schema:
   "mode": <2 or 3>,
   "reasoning": "<10 words>",
   "workers": [
-    {"worker_id": "w1", "role": "coder", "task": "<15 words>", "owned_files": ["path/file.py"], "backend": "local"}
+    {"role": "coder", "task": "<15 words>", "owned_files": ["path/file.py"], "backend": "local"}
   ]
 }
+
+Bifrost assigns worker_id as realm.file-slug (e.g. midgard.models-order); do not emit w1/w2.
 """
 
 
@@ -71,12 +74,13 @@ class Router:
 
     def plan(self, task: str) -> Plan:
         if self._is_simple(task):
+            used: dict[str, int] = {}
             return Plan(
                 mode=1,
                 reasoning="Heuristic: simple read/search task — 1 local worker",
                 workers=[
                     WorkerPlan(
-                        worker_id="w1",
+                        worker_id=assign_worker_id("local", [], used),
                         role="coder",
                         task=task,
                         owned_files=[],
@@ -104,7 +108,7 @@ class Router:
             return None
 
         # Heuristic backend assignment
-        _LOCAL_DIRS = {"models", "schemas", "migrations", "db"}
+        _LOCAL_DIRS = {"models", "schemas", "migrations", "db", "tests"}
         def _backend(f: str) -> str:
             parts = Path(f).parts
             return "local" if any(p in _LOCAL_DIRS for p in parts) else "cloud"
@@ -112,9 +116,10 @@ class Router:
         # Each worker gets the FULL original task (so business rules like
         # "apply a 10% discount" reach the worker that owns the relevant file),
         # plus a pointer to which file it is responsible for.
+        used: dict[str, int] = {}
         workers = [
             WorkerPlan(
-                worker_id=f"w{i+1}",
+                worker_id=assign_worker_id(_backend(f), [f], used),
                 role="coder",
                 task=(
                     f"{task}\n\n"
@@ -126,7 +131,7 @@ class Router:
                 owned_files=[f],
                 backend_name=_backend(f),
             )
-            for i, f in enumerate(files)
+            for f in files
         ]
         backends = sum(1 for w in workers if w.backend_name == "local")
         return Plan(
@@ -191,25 +196,31 @@ class Router:
             print("[router] overlapping owned_files detected — falling back to mode 2", file=sys.stderr)
             return self._fallback_mode2(task)
 
+        used: dict[str, int] = {}
         workers = [
             WorkerPlan(
-                worker_id=w.get("worker_id", f"w{i+1}"),
+                worker_id=assign_worker_id(
+                    w.get("backend", "cloud"),
+                    w.get("owned_files", []),
+                    used,
+                ),
                 role=w.get("role", "coder"),
                 task=w.get("task", task),
                 owned_files=w.get("owned_files", []),
                 backend_name=w.get("backend", "cloud"),
             )
-            for i, w in enumerate(raw_workers)
+            for w in raw_workers
         ]
         return Plan(mode=mode, reasoning=reasoning, workers=workers)
 
     def _fallback_mode2(self, task: str) -> Plan:
+        used: dict[str, int] = {}
         return Plan(
             mode=2,
             reasoning="Fallback: single cloud worker (decomposition unavailable)",
             workers=[
                 WorkerPlan(
-                    worker_id="w1",
+                    worker_id=assign_worker_id("cloud", [], used),
                     role="coder",
                     task=task,
                     owned_files=[],

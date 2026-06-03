@@ -17,6 +17,7 @@ class WorkerState:
     backend: str         # "local" | "cloud" | "cloud (escalated)" …
     model: str
     status: str = "pending"   # pending | running | done | error | aborted
+    owned_files: list[str] = field(default_factory=list)
     prompt_tokens: int = 0
     completion_tokens: int = 0
     cost_usd: float = 0.0
@@ -53,11 +54,14 @@ class StateRegistry:
         self._force_compact.set()
 
     def should_compact(self) -> bool:
-        """Test-and-clear: returns True once, then resets."""
-        if self._force_compact.is_set():
-            self._force_compact.clear()
-            return True
-        return False
+        """Peek: True while a manual compaction is pending. Does NOT clear —
+        the flag stays set until a compaction actually runs (clear_compact),
+        so a short-lived worker can't swallow the request without compacting."""
+        return self._force_compact.is_set()
+
+    def clear_compact(self) -> None:
+        """Clear the manual-compaction request once a compaction has run."""
+        self._force_compact.clear()
 
     def register(self, ws: WorkerState) -> None:
         with self._lock:

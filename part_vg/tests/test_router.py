@@ -32,6 +32,7 @@ def test_simple_task_stays_local():
     plan = r.plan("List all Python files in the workspace")
     assert plan.mode == 1
     assert len(plan.workers) == 1
+    assert plan.workers[0].worker_id == "midgard.primary"
     assert plan.workers[0].backend_name == "local"
 
 
@@ -69,6 +70,10 @@ def test_parse_valid_decomposition():
     plan = r._parse(raw, "test task")
     assert plan.mode == 3
     assert len(plan.workers) == 4
+    assert plan.workers[0].worker_id == "midgard.models-order"
+    assert plan.workers[1].worker_id == "midgard.schemas-order"
+    assert plan.workers[2].worker_id == "asgard.routers-orders"
+    assert plan.workers[3].worker_id == "asgard.tests-test-orders"
     assert plan.workers[0].backend_name == "local"
     assert plan.workers[2].backend_name == "cloud"
 
@@ -92,3 +97,17 @@ def test_parse_invalid_json_falls_back():
     r = _router()
     plan = r._parse("not json at all !!!", "test")
     assert plan.mode == 2
+
+
+def test_fast_path_assigns_tests_to_local():
+    r = _router()
+    task = (
+        "Create models/order.py, schemas/order.py, routers/orders.py, "
+        "and tests/test_orders.py"
+    )
+    plan = r._fast_decompose(task)
+    assert plan is not None
+    assert plan.mode == 3
+    by_file = {w.owned_files[0]: w.backend_name for w in plan.workers}
+    assert by_file["tests/test_orders.py"] == "local"
+    assert by_file["routers/orders.py"] == "cloud"

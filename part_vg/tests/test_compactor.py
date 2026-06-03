@@ -67,6 +67,62 @@ def test_compact_failed_llm_keeps_history():
     assert len(history) == 20
 
 
+def _local_config(threshold=10) -> Config:
+    cfg = _config(threshold=threshold)
+    cfg.compaction_model = "local"
+    return cfg
+
+
+def test_compact_local_uses_local_backend_when_alive():
+    history = _big_history(20)
+    cfg = _local_config()
+    mock_response = MagicMock()
+    mock_response.choices[0].message.content = "Summary."
+
+    with patch("llm.health_check", return_value=True), patch(
+        "compactor.call_llm", return_value=(mock_response, 10, 5)
+    ) as mock_llm:
+        result = compact_if_needed(history, cfg, "cloud-url", "cloud-key")
+
+    assert result is True
+    kwargs = mock_llm.call_args.kwargs
+    assert kwargs["model"] == "qwen"  # config.locals[0].model
+    assert kwargs["base_url"] == "http://localhost:1234/v1"
+
+
+def test_compact_local_falls_back_to_router_when_dead():
+    history = _big_history(20)
+    cfg = _local_config()
+    mock_response = MagicMock()
+    mock_response.choices[0].message.content = "Summary."
+
+    with patch("llm.health_check", return_value=False), patch(
+        "compactor.call_llm", return_value=(mock_response, 10, 5)
+    ) as mock_llm:
+        result = compact_if_needed(history, cfg, "cloud-url", "cloud-key")
+
+    assert result is True
+    kwargs = mock_llm.call_args.kwargs
+    assert kwargs["model"] == cfg.router_model
+    assert kwargs["base_url"] == "cloud-url"
+
+
+def test_compact_local_with_no_locals_does_not_raise():
+    history = _big_history(20)
+    cfg = _local_config()
+    cfg.locals = []  # cloud-only setup, but COMPACTION_MODEL=local
+    mock_response = MagicMock()
+    mock_response.choices[0].message.content = "Summary."
+
+    with patch("compactor.call_llm", return_value=(mock_response, 10, 5)) as mock_llm:
+        result = compact_if_needed(history, cfg, "cloud-url", "cloud-key")
+
+    assert result is True
+    kwargs = mock_llm.call_args.kwargs
+    assert kwargs["model"] == cfg.router_model  # never the literal "local"
+    assert kwargs["base_url"] == "cloud-url"
+
+
 def test_estimate_tokens():
     history = [{"role": "user", "content": "x" * 400}]
     est = _estimate_tokens(history)

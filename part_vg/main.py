@@ -10,48 +10,13 @@ Usage:
 All options can also be set via config.toml / .env.
 """
 import argparse
-import io
 import select
 import subprocess
 import sys
 import time
-from datetime import datetime
 from pathlib import Path
 
-
-class _Tee(io.TextIOBase):
-    """Write to both a stream and a log file simultaneously."""
-
-    def __init__(self, stream: io.TextIOBase, log_file: io.TextIOBase) -> None:
-        self._stream = stream
-        self._log = log_file
-
-    def write(self, s: str) -> int:
-        self._stream.write(s)
-        self._log.write(s)
-        self._log.flush()
-        return len(s)
-
-    def flush(self) -> None:
-        self._stream.flush()
-        try:
-            self._log.flush()
-        except Exception:
-            pass
-
-
-def _open_log(task: str) -> tuple[Path, io.TextIOBase]:
-    """Open a timestamped log file; return (path, file handle)."""
-    log_dir = Path(__file__).parent / "logs"
-    log_dir.mkdir(exist_ok=True)
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    safe_task = task[:40].replace(" ", "_").replace("/", "-")
-    log_path = log_dir / f"{ts}_{safe_task}.log"
-    fh = open(log_path, "w", encoding="utf-8")
-    fh.write(f"=== Bifrost session {ts} ===\n")
-    fh.write(f"Task: {task}\n\n")
-    fh.flush()
-    return log_path, fh
+from session_log import Tee, open_session_log, write_session_summary
 
 
 def _load_system_prompt(config) -> str:
@@ -115,10 +80,9 @@ def _run_task(
     from state import StateRegistry
     from ui import Dashboard
 
-    log_path, log_fh = _open_log(task)
-    # Tee stderr to log — captures all [orchestrator]/[router]/[backends] messages
+    log_path, log_fh = open_session_log(task)
     real_stderr = sys.stderr
-    sys.stderr = _Tee(real_stderr, log_fh)  # type: ignore[assignment]
+    sys.stderr = Tee(real_stderr, log_fh)  # type: ignore[assignment]
 
     try:
         prices_path = Path(__file__).parent / "model_prices.json"
@@ -171,35 +135,19 @@ def _run_task(
                 saved = cost - snap["total_usd"]
                 print(f"  {model:<40} ${cost:.4f}  (saved ${saved:.4f})")
 
-        # Write structured summary + all worker logs to the log file
-        _write_log_summary(log_fh, task, result, snap, registry, orch.routing_summary)
+        write_session_summary(
+            log_fh,
+            task=task,
+            result=result,
+            snap=snap,
+            registry=registry,
+            routing=orch.routing_summary,
+        )
 
     finally:
         sys.stderr = real_stderr
         log_fh.close()
         print(f"\n[log] {log_path}")
-
-
-def _write_log_summary(fh, task, result, snap, registry, routing) -> None:
-    fh.write("\n\n=== RESULT ===\n")
-    fh.write(result + "\n")
-    fh.write(f"\n=== COST ===\n")
-    fh.write(f"total: ${snap['total_usd']:.6f} / cap ${snap['cap_usd']:.2f}\n")
-    fh.write(f"routing: {routing}\n")
-
-    fh.write("\n=== WORKER LOGS ===\n")
-    for ws in registry.snapshot():
-        elapsed = ws.elapsed()
-        elapsed_str = f"{elapsed:.1f}s" if elapsed else "-"
-        fh.write(
-            f"\n--- {ws.worker_id} ({ws.role}) "
-            f"backend={ws.backend} model={ws.model} "
-            f"status={ws.status} elapsed={elapsed_str} "
-            f"cost=${ws.cost_usd:.6f} ---\n"
-        )
-        for line in ws.log_lines:
-            fh.write(f"  {line}\n")
-    fh.flush()
 
 
 def main() -> None:

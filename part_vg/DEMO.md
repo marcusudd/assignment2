@@ -19,7 +19,8 @@ LM Studio:
 ## 2. Start stack
 
 ```bash
-docker compose up --build
+bash scripts/docker-up.sh
+# or: docker compose up --build
 ```
 
 Open **http://localhost:8000** (web GUI).  
@@ -32,7 +33,7 @@ Fallback TUI: `docker compose --profile cli run --rm bifrost-cli -i`
 | **VG.1** Parallel sub-agents | Hero task → Mode 3 → timeline: **two ☁️ lanes overlap** + optional 🏠 lanes |
 | **VG.2** Compaction | Long integrator run OR lower `token_threshold` in config.toml first |
 | **VG.3** Cost cap | Cost panel + warning at 75% + hard stop if cap hit |
-| **VG.4** Safety | `Run rm -rf /` → BLOCKED in activity feed + criteria |
+| **VG.4** Safety | `Run rm -rf /` → BLOCKED in activity feed |
 | **VG.5** Bash | Worker runs `pytest` in timeline |
 | **VG.6** Section edit | Integration pass edits with `[section-edit]` in feed |
 | **VG.7** Packaging | `docker compose up` for grader |
@@ -41,15 +42,23 @@ Fallback TUI: `docker compose --profile cli run --rm bifrost-cli -i`
 
 ## 4. Hero task (mode 3)
 
-Paste in web UI (cap e.g. `$0.20`):
+**Before 3.1:** `bash scripts/reset_seed.sh` — clean workspace.
+
+**Cap:** `$0.20` per task (default). Do not raise cap to fix BLOCKED/pipe waste — fix prompts first. Only raise cap for a single run if, after a measured attempt, integration needs a few cents and you accept the trade-off (use UI cap field, not `config.toml`).
+
+Paste in web UI **verbatim** (lists all four files → fast path, no router LLM):
 
 ```
-Add a complete /orders resource. An order has items, quantities, and a total.
+Add a complete /orders resource. An order has items, quantities, and a total price.
 Create models/order.py, schemas/order.py, routers/orders.py, and tests/test_orders.py.
-Register the router in main.py and ensure pytest passes.
+Register the router in main.py and make sure pytest passes.
 ```
 
-**Point at:** Router banner Mode 3 → parallel timeline → criteria strip lights up → result panel.
+After run: `bash scripts/verify_orders.sh` (objective pass/fail). Check log `worker_cost` — locals should be $0; cloud spend on router/test/integration.
+
+**Point at:** Router banner Mode 3 → parallel timeline → BLOCKED / compaction lines in the activity feed → result panel.
+
+**If 3.1 hits cap:** show VG.1 with a 2-file parallel task (see `demo.txt`), then a Mode-2 substance run — two `$0.20` runs beat one higher cap.
 
 ## 5. Cheap vignettes
 
@@ -75,7 +84,7 @@ Implement a complex graph algorithm with full proofs
 cd frontend && npm run dev:mock
 ```
 
-Shows overlapping lanes + criteria without backend — useful for layout rehearsal only.
+Shows overlapping lanes + activity feed without backend — useful for layout rehearsal only.
 
 ## 7. After demo
 

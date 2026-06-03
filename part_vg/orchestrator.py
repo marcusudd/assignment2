@@ -72,15 +72,20 @@ class Orchestrator:
         )
         self.plan: Plan | None = None
         self.routing_summary: str = ""
-        self._local_rr = 0     # round-robin cursor for local workers
 
-    def _pick_local_slot(self) -> BackendSpec:
-        """Prefer a true local slot; fall back to first entry if H2 cloud proxy."""
-        local_only = [s for s in self.locals if s.is_local]
-        pool = local_only if local_only else self.locals
-        spec = pool[self._local_rr % len(pool)]
-        self._local_rr += 1
-        return spec
+    def _pick_local_slot(self, tier: str = "standard") -> BackendSpec:
+        """Two-tier local selection:
+        - "light" (boilerplate) → locals[-1] (smaller/faster model)
+        - "standard" (logic) → locals[0] (capable model)
+        Falls back gracefully if only one local is loaded.
+        """
+        true_local = [s for s in self.locals if s.is_local]
+        pool = true_local if true_local else self.locals
+        if len(pool) == 1:
+            return pool[0]
+        if tier == "light":
+            return pool[-1]
+        return pool[0]
 
     def _backend_for(self, wp: WorkerPlan) -> BackendSpec:
         """Map a worker's logical backend to a physical slot.
@@ -90,9 +95,9 @@ class Orchestrator:
         if wp.backend_name == "local":
             if not self.allow_local:
                 return self.cloud
-            return self._pick_local_slot()
+            return self._pick_local_slot(wp.local_tier)
         if not self.allow_cloud:
-            return self._pick_local_slot()
+            return self._pick_local_slot(wp.local_tier)
         return self.cloud
 
     def run(self, task: str) -> str:

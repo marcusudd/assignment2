@@ -99,7 +99,7 @@ def test_parse_invalid_json_falls_back():
     assert plan.mode == 2
 
 
-def test_fast_path_assigns_tests_to_local():
+def test_fast_path_assigns_tests_to_cloud_rest_local():
     r = _router()
     task = (
         "Create models/order.py, schemas/order.py, routers/orders.py, "
@@ -109,5 +109,33 @@ def test_fast_path_assigns_tests_to_local():
     assert plan is not None
     assert plan.mode == 3
     by_file = {w.owned_files[0]: w.backend_name for w in plan.workers}
-    assert by_file["tests/test_orders.py"] == "local"
-    assert by_file["routers/orders.py"] == "cloud"
+    # Aggressive local-first: tests → cloud (correctness critical), rest → local
+    assert by_file["tests/test_orders.py"] == "cloud"
+    assert by_file["routers/orders.py"] == "local"
+    assert by_file["models/order.py"] == "local"
+    assert by_file["schemas/order.py"] == "local"
+
+
+def test_fast_path_tier_classification():
+    r = _router()
+    task = "Create models/order.py, routers/orders.py, and tests/test_orders.py"
+    plan = r._fast_decompose(task)
+    by_file = {w.owned_files[0]: w for w in plan.workers}
+    # Boilerplate dirs get light tier; logic-bearing get standard
+    assert by_file["models/order.py"].local_tier == "light"
+    assert by_file["routers/orders.py"].local_tier == "standard"
+    # Tests go cloud so tier doesn't matter, but standard is the default
+    assert by_file["tests/test_orders.py"].local_tier == "standard"
+
+
+def test_classify_backend_functions():
+    from router import _classify_backend, _classify_tier
+    assert _classify_backend("tests/test_orders.py") == "cloud"
+    assert _classify_backend("test_orders.py") == "cloud"
+    assert _classify_backend("routers/orders.py") == "local"
+    assert _classify_backend("models/order.py") == "local"
+    assert _classify_tier("models/order.py") == "light"
+    assert _classify_tier("schemas/order.py") == "light"
+    assert _classify_tier("migrations/001.py") == "light"
+    assert _classify_tier("routers/orders.py") == "standard"
+    assert _classify_tier("services/billing.py") == "standard"

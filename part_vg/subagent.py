@@ -38,6 +38,7 @@ class WorkerPlan:
     task: str
     owned_files: list[str]
     backend_name: str   # "local" | "cloud"
+    local_tier: str = "standard"  # "light" (boilerplate) | "standard" (logic)
 
 
 class SubAgent:
@@ -64,6 +65,7 @@ class SubAgent:
         self._escalated = False
         self._failed_calls = 0
         self._chaining_blocks = 0
+        self._consecutive_tool_failures = 0  # thrash-detection
 
         ws = WorkerState(
             worker_id=plan.worker_id,
@@ -213,6 +215,25 @@ class SubAgent:
                     self.history.append(
                         {"role": "tool", "tool_call_id": tc.id, "content": result}
                     )
+                    # Thrash-detection: local workers that keep failing are
+                    # better off escalated than burning all their rounds.
+                    is_failure = (
+                        result.startswith("ERROR:")
+                        or "old_str not found" in result
+                        or result.startswith("← BLOCKED")
+                    )
+                    if is_failure:
+                        self._consecutive_tool_failures += 1
+                    else:
+                        self._consecutive_tool_failures = 0
+                    if (
+                        self._consecutive_tool_failures >= 3
+                        and not self._escalated
+                        and self._active.is_local
+                    ):
+                        self._log("⚡ Thrash detected — escalating to cloud")
+                        self._escalate()
+                        self._consecutive_tool_failures = 0
 
         self._log("Max rounds reached")
         return "Reached max rounds without final answer"

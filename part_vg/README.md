@@ -7,6 +7,7 @@ for graders (VG.7).
 - **Web GUI** — React + Vite + Tailwind at http://localhost:8000  
 - **Terminal TUI** — Rich dashboard fallback (`python main.py` or Docker CLI profile)  
 - **Motor** — own orchestrator loop (no LangChain); structured tool calls via OpenAI-compatible API  
+- **Routing principle** — cloud model only plans, writes tests, and integrates; local models do the bulk codegen. "Cost saved vs all-cloud" is the honest savings metric.
 
 ---
 

@@ -112,15 +112,7 @@ def build_payload(
         )
 
     snap = cost_tracker.snapshot()
-    counterfactual = cost_tracker.counterfactual(comparison_models)
-    savings = [
-        {
-            "model": model,
-            "would_cost": round(cost, 6),
-            "saved": round(cost - snap["total_usd"], 6),
-        }
-        for model, cost in sorted(counterfactual.items(), key=lambda x: -x[1])
-    ]
+    savings = cost_tracker.savings_breakdown(comparison_models)
 
     events = _parse_events(states)
 

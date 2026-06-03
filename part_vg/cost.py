@@ -121,3 +121,37 @@ class CostTracker:
             m: _calculate_cost(m, total_prompt, total_completion, self._prices)
             for m in comparison_models
         }
+
+    def savings_breakdown(self, comparison_models: list[str]) -> list[dict]:
+        """Per model: total saved split into local-execution and routing savings.
+
+        local_saved   = what we'd pay for the free (local) tokens on that model.
+        routing_saved = what the paid tokens would have cost on that model minus actual.
+        Both sum to would_cost - actual_spend (= the traditional counterfactual saving).
+        """
+        with self._lock:
+            records = list(self.records)
+            actual = self.total_usd
+
+        result = []
+        for model in comparison_models:
+            free_prompt = sum(r.prompt_tokens for r in records if r.cost_usd == 0)
+            free_completion = sum(r.completion_tokens for r in records if r.cost_usd == 0)
+            paid_prompt = sum(r.prompt_tokens for r in records if r.cost_usd > 0)
+            paid_completion = sum(r.completion_tokens for r in records if r.cost_usd > 0)
+
+            local_saved = _calculate_cost(model, free_prompt, free_completion, self._prices)
+            paid_at_model = _calculate_cost(model, paid_prompt, paid_completion, self._prices)
+            routing_saved = paid_at_model - actual
+            would_cost = local_saved + paid_at_model
+
+            result.append({
+                "model": model,
+                "would_cost": round(would_cost, 6),
+                "saved": round(would_cost - actual, 6),
+                "local_saved": round(local_saved, 6),
+                "routing_saved": round(routing_saved, 6),
+            })
+
+        result.sort(key=lambda x: -x["would_cost"])
+        return result

@@ -35,6 +35,26 @@ _MULTI_RE = re.compile(
     re.IGNORECASE,
 )
 
+_TEST_RE = re.compile(r'(?:^tests?/|/tests?/|^test_|/test_|_test\.py$|conftest\.py$)', re.IGNORECASE)
+_BOILERPLATE_DIRS = {"models", "schemas", "migrations", "db", "config"}
+_BOILERPLATE_FILES = {"__init__.py", "constants.py", "enums.py", "types.py"}
+
+
+def _classify_backend(f: str) -> str:
+    """Tests run on cloud (correctness critical). Everything else is local."""
+    return "cloud" if _TEST_RE.search(f) else "local"
+
+
+def _classify_tier(f: str) -> str:
+    """Light = boilerplate (pure data-shape files). Standard = logic-bearing."""
+    p = Path(f)
+    if p.name in _BOILERPLATE_FILES:
+        return "light"
+    if any(part in _BOILERPLATE_DIRS for part in p.parts):
+        return "light"
+    return "standard"
+
+
 _DECOMPOSE_SYSTEM = """\
 Decompose a coding task into parallel workers. Output ONLY a JSON object.
 
@@ -42,7 +62,10 @@ Rules (strict):
 - mode 3 = 2+ files writable independently in parallel. Use when task names multiple files.
 - mode 2 = single logical unit (one file, one bug fix).
 - owned_files: DISJOINT across all workers. Never assign main.py/__init__.py/app.py.
-- backend: "local" for ORM/schemas/boilerplate. "cloud" for business logic/tests.
+- backend: "cloud" ONLY for test files (tests/ dir, conftest.py, test_*.py). Everything
+  else (routers, services, models, schemas, utils, config) uses "local".
+- tier: "light" for pure boilerplate (models, schemas, migrations, __init__, constants).
+  "standard" for everything else (routers, services, business logic, utils).
 - task: max 15 words.
 - reasoning: max 10 words.
 
@@ -51,7 +74,7 @@ JSON schema:
   "mode": <2 or 3>,
   "reasoning": "<10 words>",
   "workers": [
-    {"role": "coder", "task": "<15 words>", "owned_files": ["path/file.py"], "backend": "local"}
+    {"role": "coder", "task": "<15 words>", "owned_files": ["path/file.py"], "backend": "local", "tier": "standard"}
   ]
 }
 
@@ -85,6 +108,7 @@ class Router:
                         task=task,
                         owned_files=[],
                         backend_name="local",
+                        local_tier="standard",
                     )
                 ],
             )
@@ -107,19 +131,10 @@ class Router:
         if len(files) < 2:
             return None
 
-        # Heuristic backend assignment
-        _LOCAL_DIRS = {"models", "schemas", "migrations", "db", "tests"}
-        def _backend(f: str) -> str:
-            parts = Path(f).parts
-            return "local" if any(p in _LOCAL_DIRS for p in parts) else "cloud"
-
-        # Each worker gets the FULL original task (so business rules like
-        # "apply a 10% discount" reach the worker that owns the relevant file),
-        # plus a pointer to which file it is responsible for.
         used: dict[str, int] = {}
         workers = [
             WorkerPlan(
-                worker_id=assign_worker_id(_backend(f), [f], used),
+                worker_id=assign_worker_id(_classify_backend(f), [f], used),
                 role="coder",
                 task=(
                     f"{task}\n\n"
@@ -129,16 +144,18 @@ class Router:
                     f"business logic, validation, and edge cases."
                 ),
                 owned_files=[f],
-                backend_name=_backend(f),
+                backend_name=_classify_backend(f),
+                local_tier=_classify_tier(f),
             )
             for f in files
         ]
-        backends = sum(1 for w in workers if w.backend_name == "local")
+        n_local = sum(1 for w in workers if w.backend_name == "local")
+        n_cloud = len(workers) - n_local
         return Plan(
             mode=3,
             reasoning=(
                 f"Task names {len(files)} files — "
-                f"{backends} local, {len(files)-backends} cloud"
+                f"{n_local} local, {n_cloud} cloud"
             ),
             workers=workers,
         )
@@ -208,6 +225,9 @@ class Router:
                 task=w.get("task", task),
                 owned_files=w.get("owned_files", []),
                 backend_name=w.get("backend", "cloud"),
+                local_tier=w.get("tier", _classify_tier(
+                    w.get("owned_files", [""])[0]
+                )),
             )
             for w in raw_workers
         ]
@@ -225,6 +245,7 @@ class Router:
                     task=task,
                     owned_files=[],
                     backend_name="cloud",
+                    local_tier="standard",
                 )
             ],
         )

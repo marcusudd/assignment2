@@ -33,6 +33,7 @@ Fallback TUI: `docker compose --profile cli run --rm bifrost-cli -i`
 | **VG.1** Parallel sub-agents | Hero task → Mode 3 → timeline: **two ☁️ lanes overlap** + optional 🏠 lanes |
 | **VG.2** Compaction | Long integrator run OR lower `token_threshold` in config.toml first |
 | **VG.3** Cost cap | Cost panel + warning at 75% + hard stop if cap hit |
+| **Savings story** | Heimdall panel → "Saved vs all-Haiku, no Bifrost" — same model, local offload only. Switch selector to Opus to see the premium comparison. Against budget models (gemini-flash) Bifrost is not cheaper — that's shown honestly. |
 | **VG.4** Safety | `Run rm -rf /` → BLOCKED in activity feed |
 | **VG.5** Bash | Worker runs `pytest` in timeline |
 | **VG.6** Section edit | Integration pass edits with `[section-edit]` in feed |
@@ -56,7 +57,9 @@ Register the router in main.py and make sure pytest passes.
 
 After run: `bash scripts/verify_orders.sh` (objective pass/fail). Check log `worker_cost` — locals should be $0; cloud spend on router/test/integration.
 
-**Point at:** Router banner Mode 3 → parallel timeline → BLOCKED / compaction lines in the activity feed → result panel.
+**Point at:** Router banner Mode 3 → parallel timeline (most lanes midgard/local) → BLOCKED / compaction lines in the activity feed → Heimdall savings card (local-execution split) → result panel.
+
+**Savings beat:** the default comparison is Haiku (same cloud model Bifrost actually uses). Local workers ran for $0 — those tokens would have cost ~$X on Haiku alone. That's the honest number: local offload, same model, no cherry-picking.
 
 **If 3.1 hits cap:** show VG.1 with a 2-file parallel task (see `demo.txt`), then a Mode-2 substance run — two `$0.20` runs beat one higher cap.
 

@@ -297,9 +297,12 @@ export default function Analytics() {
   );
   const costSaved = selectedSaving?.saved ?? 0;
   const cloudBaseline = selectedSaving?.would_cost ?? 0;
+  const localSaved = selectedSaving?.local_saved ?? 0;
+  const routingSaved = selectedSaving?.routing_saved ?? 0;
   const savePct = cloudBaseline
     ? Math.min(100, (costSaved / cloudBaseline) * 100)
     : 0;
+  const costIsNegative = costSaved <= 0 && cloudBaseline > 0;
 
   return (
     <aside className="glass-panel flex h-full min-h-0 flex-col overflow-hidden">
@@ -325,7 +328,7 @@ export default function Analytics() {
           <div className="glass-card overflow-hidden p-4">
             <div className="mb-2 flex items-center justify-between gap-2">
               <p className="text-xs font-medium text-slate-500">
-                Cost saved (local routing)
+                Saved vs all-{shortModelId(comparisonModel)}, no Bifrost
               </p>
               <select
                 value={comparisonModel}
@@ -340,23 +343,54 @@ export default function Analytics() {
                 ))}
               </select>
             </div>
-            <p className="metric-glow-text text-4xl font-semibold tracking-tight text-bifrost">
-              ${costSaved.toFixed(2)}
-            </p>
+
+            {costIsNegative ? (
+              <p className="mb-2 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-white/50">
+                Bifrost costs more than {shortModelId(comparisonModel)} on this baseline
+                — switch to a premium model (e.g. Opus, GPT-5) to see the saving.
+              </p>
+            ) : (
+              <>
+                <div className="mb-1 flex items-baseline gap-2">
+                  <p className="metric-glow-text text-4xl font-semibold tracking-tight text-bifrost">
+                    ${costSaved.toFixed(2)}
+                  </p>
+                  {savePct > 0 && (
+                    <span className="text-lg font-semibold text-bifrost/70">
+                      {Math.round(savePct)}% cheaper
+                    </span>
+                  )}
+                </div>
+                {(localSaved > 0 || routingSaved > 0) && (
+                  <div className="mb-2 space-y-1 rounded-lg border border-white/[0.06] bg-white/[0.03] px-3 py-2">
+                    <div className="flex justify-between text-[10px]">
+                      <span className="text-white/45">Local execution (free tokens)</span>
+                      <span className="font-mono font-medium text-bifrost/80">
+                        +${localSaved.toFixed(3)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between text-[10px]">
+                      <span className="text-white/45">Model routing (cloud tier)</span>
+                      <span className="font-mono font-medium text-bifrost/80">
+                        +${routingSaved > 0 ? routingSaved.toFixed(3) : "0.000"}
+                      </span>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+
             <p className="mb-1 text-xs text-slate-500">
-              Session spend: ${(cost?.total ?? 0).toFixed(4)}
-              {cost?.warning && " · warning"}
-              {cost?.stopped && " · cap hit"}
-            </p>
-            <p className="mb-3 text-xs text-slate-500">
-              vs. {comparisonModel} baseline $
-              {cloudBaseline > 0 ? cloudBaseline.toFixed(2) : "—"}
+              Actual spend: ${(cost?.total ?? 0).toFixed(4)}
+              {" · "}baseline: ${cloudBaseline > 0 ? cloudBaseline.toFixed(2) : "—"}
+              {cost?.warning && " · ⚠ near cap"}
+              {cost?.stopped && " · 🛑 cap hit"}
             </p>
             <div className="h-2 overflow-hidden rounded-full bg-midgard/80 shadow-glass-inset">
               <div
                 className="h-full rounded-full transition-all duration-500"
                 style={{
-                  width: `${Math.max(savePct, cost?.fraction ? cost.fraction * 100 : 0)}%`,
+                  width: `${Math.max(costIsNegative ? 0 : savePct, cost?.fraction ? cost.fraction * 100 : 0)}%`,
                   background:
                     "linear-gradient(90deg, #1b4322 0%, #39ff14 70%, #5dff4a 100%)",
                   boxShadow: "0 0 12px rgba(57,255,20,0.35)",
@@ -364,13 +398,8 @@ export default function Analytics() {
               />
             </div>
             <div className="mt-2 flex justify-between font-mono text-[10px] text-slate-600">
-              <span>$0</span>
-              <span>
-                {cost?.fraction != null
-                  ? `${Math.round(cost.fraction * 100)}% of cap`
-                  : "—"}
-              </span>
-              <span>${cost?.cap?.toFixed(2) ?? "—"}</span>
+              <span>$0 spent</span>
+              <span>${cost?.cap?.toFixed(2) ?? "—"} cap</span>
             </div>
           </div>
 

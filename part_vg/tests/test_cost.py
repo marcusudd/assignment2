@@ -80,3 +80,44 @@ def test_per_worker_attribution():
     assert "w1" in snap["worker_cost"]
     assert "w2" in snap["worker_cost"]
     assert snap["worker_cost"]["w1"] > snap["worker_cost"]["w2"]
+
+
+def test_savings_breakdown_split_sums_correctly():
+    """local_saved + routing_saved must equal saved (total counterfactual saving)."""
+    t = _tracker(cap=10.0)
+    # Local worker (free)
+    t.add("w1", "local/gemma", 5000, 2000)
+    # Cloud worker (paid)
+    t.add("w2", "anthropic/claude-haiku-4-5", 1000, 500)
+
+    breakdown = t.savings_breakdown(["anthropic/claude-opus-4-8"])
+    assert len(breakdown) == 1
+    row = breakdown[0]
+
+    # Structural integrity: split sums to total
+    assert abs(row["local_saved"] + row["routing_saved"] - row["saved"]) < 1e-9
+    # would_cost must be > actual (Opus is more expensive than Haiku)
+    assert row["would_cost"] > t.snapshot()["total_usd"]
+    # Local tokens were free, so local_saved > 0 (Opus would have charged for them)
+    assert row["local_saved"] > 0
+
+
+def test_savings_breakdown_no_local_workers():
+    """All paid workers: local_saved=0, routing_saved = full saving."""
+    t = _tracker(cap=10.0)
+    t.add("w1", "anthropic/claude-haiku-4-5", 1000, 500)
+    breakdown = t.savings_breakdown(["anthropic/claude-opus-4-8"])
+    row = breakdown[0]
+    assert row["local_saved"] == 0.0
+    assert abs(row["routing_saved"] - row["saved"]) < 1e-9
+
+
+def test_savings_breakdown_returns_negative_for_cheaper_baseline():
+    """Against a cheaper model than the one we used, saved should be negative."""
+    t = _tracker(cap=10.0)
+    # Pay Opus prices
+    t.add("w1", "anthropic/claude-opus-4-8", 1000, 500)
+    breakdown = t.savings_breakdown(["anthropic/claude-haiku-4-5"])
+    row = breakdown[0]
+    # Haiku baseline is cheaper → we spent more than we would have
+    assert row["saved"] < 0

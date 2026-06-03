@@ -16,7 +16,9 @@ import { useEventStream } from "./hooks/useEventStream.js";
 
 const BifrostContext = createContext(null);
 
-export const DEFAULT_COMPARISON_MODEL = "anthropic/claude-opus-4-8";
+// Haiku = the cloud model Bifrost actually uses → "vs all-Haiku, no Bifrost" is the
+// honest local-offload metric. Opus is available for the premium comparison.
+export const DEFAULT_COMPARISON_MODEL = "anthropic/claude-haiku-4-5";
 
 const FALLBACK_COMPARISON_MODELS = [
   "anthropic/claude-opus-4-8",

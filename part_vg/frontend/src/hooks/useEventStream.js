@@ -16,11 +16,21 @@ export function useEventStream() {
     if (IS_MOCK) {
       const id = window.setInterval(() => {
         setPayload((prev) => {
+          if (!prev?.running) return prev;
           const workers = (prev?.workers ?? []).map((w) => ({
             ...w,
             end: w.end != null ? w.end + 0.25 : w.end,
           }));
-          return { ...prev, workers };
+          const spanSec = workers.length
+            ? Math.max(...workers.map((w) => w.end ?? 0))
+            : prev?.metrics?.span_sec ?? 0;
+          return {
+            ...prev,
+            workers,
+            metrics: prev?.metrics
+              ? { ...prev.metrics, span_sec: spanSec, span_live: true }
+              : prev.metrics,
+          };
         });
       }, MOCK_TICK_MS);
       return () => window.clearInterval(id);

@@ -6,7 +6,6 @@ import re
 from pathlib import Path
 
 _BLOCKED: list[tuple[str, str]] = [
-    (r"(?:^|[^|&])(&&|\|\||;|&|\|)(?:[^|&]|$)", "command chaining"),
     (r"\brm\b.*-[rRfF]", "recursive/force delete"),
     (r"\bdd\b", "dd command"),
     (r"\bmkfs\b", "filesystem format"),
@@ -17,6 +16,8 @@ _BLOCKED: list[tuple[str, str]] = [
     (r"\b(?:pkexec|doas|run0)\b", "privilege escalation"),
     (r"\b(?:shutdown|reboot|halt|poweroff)\b", "system power command"),
     (r"(?:curl|wget)\b.*\|\s*(?:ba)?sh", "remote code execution"),
+    (r"\|\s*(?:ba)?sh\b", "pipe to shell interpreter"),
+    (r"\|\s*python[23]?\b", "pipe to python interpreter"),
     (r"(?:curl|wget)\b.*>\s*\S+\.sh\b", "downloading shell scripts"),
     (r"\bnc\b(?:\s|$)|\bnetcat\b", "netcat"),
     (r"(?:cat|less|head|tail|more)\b.*\.env\b", "reading secrets file"),
@@ -46,6 +47,42 @@ def _strip_heredoc(command: str) -> str:
     return re.split(r"<<-?\s*['\"]?\w+['\"]?", command, maxsplit=1)[0]
 
 
+def _strip_quoted_strings(command: str) -> str:
+    """Replace quoted regions so shell-level ; / & scans ignore python -c bodies."""
+    out: list[str] = []
+    i = 0
+    n = len(command)
+    while i < n:
+        ch = command[i]
+        if ch not in "'\"":
+            out.append(ch)
+            i += 1
+            continue
+        quote = ch
+        j = i + 1
+        while j < n:
+            if command[j] == "\\" and quote == "\"":
+                j += 2
+                continue
+            if command[j] == quote:
+                break
+            j += 1
+        out.append(" " * (j - i + 1))
+        i = j + 1 if j < n else n
+    return "".join(out)
+
+
+def _shell_separator_blocked(command: str) -> str | None:
+    """Block shell-level ; and background & — allow |, &&, ||, 2>&1, &>."""
+    head = _strip_quoted_strings(_strip_heredoc(command))
+    if ";" in head:
+        return "shell command separator"
+    cleaned = re.sub(r"\d*>&\d*|&>", " ", head)
+    if re.search(r"(?<![&])&(?![&])", cleaned):
+        return "background execution"
+    return None
+
+
 def _has_external_path(command: str, workspace_dir: str) -> bool:
     workspace = str(Path(workspace_dir).resolve())
     head = _strip_heredoc(command)
@@ -61,6 +98,9 @@ def _has_external_path(command: str, workspace_dir: str) -> bool:
 
 def security_check(command: str, workspace_dir: str) -> str | None:
     """Return a rejection reason if the command should be blocked, else None."""
+    sep = _shell_separator_blocked(command)
+    if sep:
+        return sep
     head = _strip_heredoc(command)
     for pattern, reason in _BLOCKED:
         if re.search(pattern, head, re.IGNORECASE):

@@ -7,6 +7,7 @@
     "mode": 3,
     "summary": "Mode 3: decomposed into 4 parallel agents (2L / 2C)"
   },
+  "fallback_detected": false,
   "workers": [
     {
       "id": "midgard.models-order",
@@ -16,7 +17,7 @@
       "backend": "local-0",
       "model": "gemma-4-e4b",
       "status": "running",
-      "action": "gemma: creating models/order.py",
+      "action": "gemma: writing models/order.py",
       "tokens": 420,
       "prompt_tokens": 280,
       "completion_tokens": 140,
@@ -33,7 +34,7 @@
       "backend": "local-1",
       "model": "gemma-4-26b-a4b-it-mlx",
       "status": "running",
-      "action": "gemma: creating schemas/order.py",
+      "action": "gemma: writing schemas/order.py",
       "tokens": 310,
       "prompt_tokens": 200,
       "completion_tokens": 110,
@@ -102,19 +103,56 @@
   ],
   "events": [
     {
+      "kind": "routing",
+      "text": "🔀 Router: Mode 3: decomposed into 4 parallel agents (2L / 2C)",
+      "worker": null,
+      "realm": "bifrost",
+      "ts": 0.0
+    },
+    {
+      "kind": "lane",
+      "text": "▶ [Midgard] lane started — create models/order.py",
+      "worker": "midgard.models-order",
+      "realm": "midgard",
+      "ts": 0.1
+    },
+    {
       "kind": "action",
-      "text": "▶ edit_file: models/order.py [create]",
-      "worker": "midgard.models-order"
+      "text": "▶ write_file: models/order.py [write]",
+      "worker": "midgard.models-order",
+      "realm": "midgard",
+      "ts": 0.4
+    },
+    {
+      "kind": "lane",
+      "text": "▶ [Asgard] lane started — create tests/test_orders.py",
+      "worker": "asgard.tests-test-orders",
+      "realm": "asgard",
+      "ts": 1.0
     },
     {
       "kind": "blocked",
       "text": "← BLOCKED (recursive delete). Revise and try again.",
-      "worker": "asgard.tests-test-orders"
+      "worker": "asgard.tests-test-orders",
+      "realm": "asgard",
+      "ts": 2.3
     },
     {
       "kind": "compaction",
       "text": "🗜 compacted history (context engineering)",
-      "worker": "asgard.integration"
+      "worker": "asgard.integration",
+      "realm": "asgard",
+      "ts": 5.1
     }
-  ]
+  ],
+  "metrics": {
+    "span_sec": 9.1,
+    "span_live": true,
+    "workers": {
+      "total": 4,
+      "local": 2,
+      "cloud": 2,
+      "by_role": { "coder": 4 }
+    }
+  }
 }

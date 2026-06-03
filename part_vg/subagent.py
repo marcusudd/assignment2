@@ -13,7 +13,9 @@ Minimal escalation (D4): if the local backend returns None (connection
 failure or malformed response) on the first call, the worker switches
 transparently to the cloud backend for that round and all subsequent ones.
 """
+import ast
 import json
+import re
 import sys
 import time
 from dataclasses import dataclass, field
@@ -29,6 +31,41 @@ from tools import TOOL_SCHEMAS, dispatch_tool
 # Retries on transient None responses (network blips, provider 5xx) before
 # a worker gives up. Separate from local→cloud escalation.
 _MAX_TRANSIENT_RETRIES = 3
+_CLOUD_THRASH_ABORT = 5
+_BASE_MAX_TOKENS = 4096
+_HIGH_MAX_TOKENS = 8192
+_MAX_MAX_TOKENS = 16384
+_LENGTH_TOKEN_BUMP = 4096
+_MAX_LENGTH_RETRIES = 2
+
+
+def repair_tool_arguments(raw: str) -> dict | None:
+    """Try to salvage malformed tool-call JSON from the model."""
+    if not raw or not raw.strip():
+        return {}
+    s = raw.strip()
+    if s.startswith("```"):
+        lines = s.split("\n")
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        s = "\n".join(lines).strip()
+    s = re.sub(r",\s*}", "}", s)
+    s = re.sub(r",\s*]", "]", s)
+    try:
+        parsed = json.loads(s)
+        if isinstance(parsed, dict):
+            return parsed
+    except json.JSONDecodeError:
+        pass
+    try:
+        parsed = ast.literal_eval(s)
+        if isinstance(parsed, dict):
+            return parsed
+    except (SyntaxError, ValueError):
+        pass
+    return None
 
 
 @dataclass
@@ -85,7 +122,8 @@ class SubAgent:
         """Execute the worker task. Returns a plain-text summary."""
         wid = self.plan.worker_id
         self.registry.update(wid, status="running", start_ts=time.monotonic())
-        self._log(f"Starting: {self.plan.task[:80]}")
+        realm = "Midgard" if self.plan.backend_name == "local" else "Asgard"
+        self._log(f"▶ [{realm}] lane started — {self.plan.task[:72]}")
 
         self.history.append({"role": "user", "content": self._build_user_prompt()})
 
@@ -100,6 +138,15 @@ class SubAgent:
     # Internal
     # ------------------------------------------------------------------
 
+    def _initial_max_tokens(self) -> int:
+        if self.plan.role == "integrator":
+            return _HIGH_MAX_TOKENS
+        if self.plan.role == "coder":
+            for path in self.plan.owned_files:
+                if "test" in path.lower():
+                    return _HIGH_MAX_TOKENS
+        return _BASE_MAX_TOKENS
+
     def _loop(self) -> str:
         wid = self.plan.worker_id
         # The integrator has the hardest job (read all files, fix cross-refs,
@@ -107,6 +154,8 @@ class SubAgent:
         rounds = self.config.max_rounds
         if self.plan.role == "integrator":
             rounds = int(rounds * 2)
+        current_max_tokens = self._initial_max_tokens()
+        length_retries = 0
         for round_num in range(rounds):
 
             # Cooperative stop check (D5)
@@ -139,7 +188,7 @@ class SubAgent:
                 base_url=self._active.base_url,
                 api_key=self._active.api_key,
                 tools=TOOL_SCHEMAS,
-                max_tokens=4096,
+                max_tokens=current_max_tokens,
             )
 
             if response is None:
@@ -180,8 +229,25 @@ class SubAgent:
                 raise
 
             msg = response.choices[0].message
-            finish_reason = response.choices[0].finish_reason
+            raw_finish = response.choices[0].finish_reason
 
+            if raw_finish == "length":
+                if (
+                    length_retries < _MAX_LENGTH_RETRIES
+                    and current_max_tokens < _MAX_MAX_TOKENS
+                ):
+                    length_retries += 1
+                    current_max_tokens = min(
+                        current_max_tokens + _LENGTH_TOKEN_BUMP, _MAX_MAX_TOKENS
+                    )
+                    self._log(
+                        f"⚠ output truncated — retrying with max_tokens={current_max_tokens}"
+                    )
+                    continue
+                self._log("⚠ output truncated — giving up after token limit bumps")
+                return "ERROR: LLM output truncated (max_tokens)"
+
+            finish_reason = raw_finish
             # Normalize finish_reason (inherited from part_3/agent.py:437-440)
             if msg.tool_calls:
                 finish_reason = "tool_calls"
@@ -220,7 +286,7 @@ class SubAgent:
                     is_failure = (
                         result.startswith("ERROR:")
                         or "old_str not found" in result
-                        or result.startswith("← BLOCKED")
+                        or result.startswith("BLOCKED")
                     )
                     if is_failure:
                         self._consecutive_tool_failures += 1
@@ -234,24 +300,38 @@ class SubAgent:
                         self._log("⚡ Thrash detected — escalating to cloud")
                         self._escalate()
                         self._consecutive_tool_failures = 0
+                    if (
+                        self._consecutive_tool_failures >= _CLOUD_THRASH_ABORT
+                        and not self._active.is_local
+                    ):
+                        self._log(
+                            "Circuit breaker: too many consecutive cloud failures — aborting worker"
+                        )
+                        return "Aborted: repeated tool failures on cloud worker"
 
         self._log("Max rounds reached")
         return "Reached max rounds without final answer"
 
     def _dispatch(self, tc) -> str:
         name = tc.function.name
+        raw_args = tc.function.arguments or "{}"
         try:
-            inputs = json.loads(tc.function.arguments or "{}")
+            inputs = json.loads(raw_args)
         except json.JSONDecodeError:
-            self._log(f"⚠ malformed JSON from model for tool {name!r}")
-            return "ERROR: invalid tool argument JSON from model"
+            repaired = repair_tool_arguments(raw_args)
+            if repaired is None:
+                self._log(f"⚠ malformed JSON from model for tool {name!r}")
+                return "ERROR: invalid tool argument JSON from model"
+            inputs = repaired
+            self._log(f"⚠ repaired malformed JSON for tool {name!r}")
 
         model_short = self._active.model.split("/")[-1][:16]
         human_action = self._human_action(name, inputs, model_short)
         self.registry.update(self.plan.worker_id, current_action=human_action)
         if name == "edit_file":
-            tag = "create" if not inputs.get("old_str", "") else "section-edit"
-            detail = f"{self._fmt_inputs(name, inputs)} [{tag}]"
+            detail = f"{self._fmt_inputs(name, inputs)} [section-edit]"
+        elif name == "write_file":
+            detail = f"{self._fmt_inputs(name, inputs)} [write]"
         else:
             detail = self._fmt_inputs(name, inputs)
         self._log(f"▶ {name}: {detail}")
@@ -266,13 +346,16 @@ class SubAgent:
         if (
             name == "bash"
             and result.startswith("BLOCKED")
-            and "command chaining" in result
+            and (
+                "shell command separator" in result
+                or "background execution" in result
+            )
         ):
             self._chaining_blocks += 1
             if self._chaining_blocks >= 2:
                 result += (
-                    "\n\nYou have repeated blocked cd/&& commands. "
-                    "Use one command only, cwd is already the workspace."
+                    "\n\nYou have repeated blocked shell separators. "
+                    "Cwd is already the workspace; use | or && instead of ;."
                 )
         else:
             self._chaining_blocks = 0
@@ -297,10 +380,10 @@ class SubAgent:
         if self.plan.owned_files:
             files_note = (
                 f"\n\nCreate ONLY these files: {', '.join(self.plan.owned_files)}\n"
-                "Write complete, working code immediately using edit_file "
-                "(old_str must be a string; use old_str='' to create a new file). Do NOT explore the workspace "
-                "or list files first — you already know your task. You may "
-                "read_file ONLY if you need to see an existing model/schema to "
+                "Write complete, working code immediately using write_file(path, content). "
+                "Use edit_file only to patch an existing section after read_file. "
+                "Do NOT explore the workspace or list files first — you already know your task. "
+                "You may read_file ONLY if you need to see an existing model/schema to "
                 "import from. Finish in as few steps as possible."
             )
         return self.plan.task + files_note
@@ -314,11 +397,12 @@ class SubAgent:
         if tool == "bash":
             cmd = inputs.get("command", "")[:30]
             return f"{model_short}: $ {cmd}"
+        if tool == "write_file":
+            path = inputs.get("path", "?")
+            return f"{model_short}: writing {path}"
         if tool == "edit_file":
             path = inputs.get("path", "?")
-            is_create = not inputs.get("old_str", "")
-            verb = "creating" if is_create else "editing"
-            return f"{model_short}: {verb} {path}"
+            return f"{model_short}: editing {path}"
         if tool == "read_file":
             path = inputs.get("path", "?")
             return f"{model_short}: reading {path}"
@@ -339,6 +423,6 @@ class SubAgent:
     def _fmt_inputs(name: str, inputs: dict) -> str:
         if name == "bash":
             return inputs.get("command", "")[:60]
-        if name in ("read_file", "edit_file"):
+        if name in ("read_file", "edit_file", "write_file"):
             return inputs.get("path", "")
         return str(inputs)[:60]

@@ -63,11 +63,28 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "write_file",
+            "description": (
+                "Create or overwrite a file with full content. Prefer this for new files "
+                "instead of edit_file. Path is relative to workspace."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "content": {"type": "string"},
+                },
+                "required": ["path", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "edit_file",
             "description": (
-                "Replace an exact section of a file. old_str must match verbatim. "
-                "Returns error if not found or ambiguous. Use read_file first. "
-                "To create a new file pass old_str='' (empty string)."
+                "Replace an exact section of an EXISTING file. old_str must match verbatim. "
+                "Use read_file first. For new files use write_file, not edit_file."
             ),
             "parameters": {
                 "type": "object",
@@ -92,13 +109,11 @@ def tool_bash(
     reason = security_check(command, workspace_dir)
     if reason:
         msg = f"BLOCKED ({reason}). Do not repeat this command shape."
-        if reason == "command chaining":
+        if reason in ("shell command separator", "background execution"):
             ws = Path(workspace_dir).resolve()
             msg += (
                 f" Shell cwd is already {ws}. "
-                "Run a single command with a relative path, e.g. "
-                f"'python3 -m pytest tests/ -x -q' or 'python3 wordle.py' — "
-                "no cd, no &&, no pipes (|), no head/grep chains."
+                "Use pipes (|), &&, or || if needed — avoid shell ; and trailing &."
             )
         return msg
     if not auto_approve:
@@ -149,6 +164,19 @@ def tool_read_file(path: str, workspace_dir: str, max_output: int = 5000) -> str
         return f"ERROR: {e}"
 
 
+def tool_write_file(path: str, content: str, workspace_dir: str) -> str:
+    target = resolve_path(path, workspace_dir)
+    if target is None:
+        return "ERROR: path is outside the workspace directory."
+    try:
+        existed = target.exists()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        return f"OK: {'updated' if existed else 'created'} {path}"
+    except Exception as e:
+        return f"ERROR: {e}"
+
+
 def tool_edit_file(
     path: str, old_str: str, new_str: str, workspace_dir: str
 ) -> str:
@@ -157,10 +185,10 @@ def tool_edit_file(
         return "ERROR: path is outside the workspace directory."
     try:
         if old_str == "":
-            # Create new file (or overwrite)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(new_str, encoding="utf-8")
-            return f"OK: created {path}"
+            return (
+                "ERROR: use write_file to create or overwrite a whole file; "
+                "edit_file is for section edits on existing files."
+            )
         if not target.exists():
             return f"ERROR: file not found: {path}"
         content = target.read_text(encoding="utf-8", errors="replace")
@@ -187,6 +215,8 @@ def dispatch_tool(
             return tool_bash(inputs["command"], workspace_dir, max_output, auto_approve)
         if name == "read_file":
             return tool_read_file(inputs["path"], workspace_dir, max_output)
+        if name == "write_file":
+            return tool_write_file(inputs["path"], inputs["content"], workspace_dir)
         if name == "edit_file":
             return tool_edit_file(
                 inputs["path"], inputs["old_str"], inputs["new_str"], workspace_dir

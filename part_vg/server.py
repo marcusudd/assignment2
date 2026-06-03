@@ -13,6 +13,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -154,6 +155,7 @@ def _run_orchestrator(
             sys.stderr = real_stderr
             log_fh.close()
             logging.info("Run %s finished — log %s", holder.get("run_id"), holder.get("log_path"))
+        holder["run_end_ts"] = time.monotonic()
         holder["running"] = False
 
 
@@ -331,10 +333,17 @@ def api_reset() -> dict:
 
 def _load_mock_fixture() -> dict:
     data = json.loads(_MOCK_FIXTURE_PATH.read_text(encoding="utf-8"))
+    if not data.get("running"):
+        return data
     workers = data.get("workers") or []
     for w in workers:
         if w.get("end") is not None:
             w["end"] = round(w["end"] + 0.25, 2)
+    if workers:
+        span = max(w.get("end") or 0 for w in workers)
+        metrics = data.setdefault("metrics", {})
+        metrics["span_sec"] = span
+        metrics["span_live"] = True
     return data
 
 
@@ -369,6 +378,7 @@ async def api_events() -> StreamingResponse:
                             run_id=holder.get("run_id"),
                             result=holder.get("result"),
                             running=holder.get("running", False),
+                            run_end_ts=holder.get("run_end_ts"),
                         )
                     if holder.get("error"):
                         payload["error"] = holder["error"]

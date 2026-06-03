@@ -25,6 +25,7 @@ class WorkerState:
     end_ts: float | None = None
     current_action: str = ""
     log_lines: list[str] = field(default_factory=list)
+    log_ts: list[float] = field(default_factory=list)  # monotonic, parallel to log_lines
 
     def elapsed(self) -> float | None:
         if self.start_ts is None:
@@ -34,8 +35,10 @@ class WorkerState:
 
     def append_log(self, line: str) -> None:
         self.log_lines.append(line)
+        self.log_ts.append(time.monotonic())
         if len(self.log_lines) > 200:
             self.log_lines = self.log_lines[-200:]
+            self.log_ts = self.log_ts[-200:]
 
 
 class StateRegistry:
@@ -47,6 +50,7 @@ class StateRegistry:
         self._phase: str = "idle"
         self._routing_mode: int | None = None
         self._routing_summary: str = ""
+        self._run_log: list[tuple[float, str]] = []
         self._force_compact = threading.Event()
 
     def request_compact(self) -> None:
@@ -81,6 +85,12 @@ class StateRegistry:
             if ws:
                 ws.append_log(line)
 
+    def append_run_log(self, line: str) -> None:
+        with self._lock:
+            self._run_log.append((time.monotonic(), line))
+            if len(self._run_log) > 50:
+                self._run_log = self._run_log[-50:]
+
     def snapshot(self) -> list[WorkerState]:
         """Shallow copy of all states for the render loop."""
         import copy
@@ -93,6 +103,7 @@ class StateRegistry:
             self._phase = "idle"
             self._routing_mode = None
             self._routing_summary = ""
+            self._run_log = []
 
     def set_phase(self, phase: str) -> None:
         with self._lock:
@@ -110,3 +121,7 @@ class StateRegistry:
     def get_routing(self) -> tuple[int | None, str]:
         with self._lock:
             return self._routing_mode, self._routing_summary
+
+    def run_log_snapshot(self) -> list[tuple[float, str]]:
+        with self._lock:
+            return list(self._run_log)

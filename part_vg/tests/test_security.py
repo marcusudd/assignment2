@@ -48,16 +48,51 @@ def test_safe_commands_pass():
 
 
 def test_heredoc_not_falsely_blocked():
-    # Code inside heredoc with && should not trigger chaining block
     cmd = "cat > app.py <<'EOF'\nif x and y:\n    pass\nEOF"
     assert security_check(cmd, WS) is None
 
 
+def test_pipe_allowed():
+    assert security_check("find . -name '*.py' | head -5", WS) is None
+
+
+def test_and_and_allowed():
+    assert security_check("mkdir foo && cd foo", WS) is None
+
+
+def test_or_or_allowed():
+    assert security_check("test -f models/order.py || echo missing", WS) is None
+
+
+def test_semicolon_blocked_outside_quotes():
+    assert security_check("rm file; cat /etc/passwd", WS) == "shell command separator"
+
+
+def test_python_c_semicolon_allowed():
+    cmd = 'python3 -c "import os; print(os.getcwd())"'
+    assert security_check(cmd, WS) is None
+
+
+def test_background_ampersand_blocked():
+    assert security_check("sleep 999 &", WS) == "background execution"
+
+
+def test_pipe_to_shell_blocked():
+    assert security_check("cat payload.sh | bash", WS) is not None
+    assert security_check("echo 'rm -rf .' | sh", WS) is not None
+
+
+def test_pipe_to_python_blocked():
+    assert security_check("base64 -d blob | python3", WS) is not None
+    assert security_check("cat script.py | python", WS) is not None
+
+
+def test_stderr_redirect_allowed():
+    assert security_check("python3 -m pytest -v 2>&1", WS) is None
+    assert security_check("command &> out.log", WS) is None
+    assert security_check("ls >&2", WS) is None
+
+
 def test_resolve_path_traversal():
-    ws = Path(WS)
     assert resolve_path("../etc/passwd", WS) is None
     assert resolve_path("subdir/file.py", WS) is not None
-
-
-def test_pipe_chaining_blocked():
-    assert security_check("find . -name '*.py' | head", WS) is not None

@@ -39,7 +39,7 @@ After frontend changes, rebuild: `docker compose up --build` (or the script abov
 LM Studio on the host (optional but recommended for cheap local workers):
 
 - Enable server on port **1234**
-- Load models matching `LOCAL_MODEL` and `LOCAL_MODEL_2` in `.env`
+- Load **one** model in LM Studio: `LOCAL_MODEL` (default `gemma-4-26b-a4b-it-mlx`). Leave `LOCAL_MODEL_2` unset for stable demo.
 - From container, `LOCAL_BASE_URL` defaults to `http://host.docker.internal:1234/v1`
 
 ---
@@ -146,8 +146,8 @@ List all Python files in the workspace
 | `OPENROUTER_API_KEY` | Required for cloud + router |
 | `CLOUD_MODEL` | Cloud workers + integration |
 | `ROUTER_MODEL` | Task decomposition (cheap model OK) |
-| `LOCAL_MODEL` | Primary LM Studio model |
-| `LOCAL_MODEL_2` | Second local slot (`gemma-4-e4b` for dual-local demo) |
+| `LOCAL_MODEL` | LM Studio model for all local workers (demo: single-local 26b) |
+| `LOCAL_MODEL_2` | Optional second slot; only if RAM keeps two models loaded without swap |
 | `LOCAL_BASE_URL` | LM Studio OpenAI-compatible URL |
 
 ---

@@ -46,6 +46,7 @@ export function BifrostProvider({ children }) {
   const [localEnabled, setLocalEnabled] = useState(true);
   const [cloudEnabled, setCloudEnabled] = useState(true);
   const [task, setTask] = useState("");
+  const [currentTask, setCurrentTask] = useState("");
   const [cap, setCap] = useState("");
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState(false);
@@ -70,6 +71,10 @@ export function BifrostProvider({ children }) {
     const running = payload.workers.find((w) => w.status === "running");
     if (running?.model) setSelectedModel(running.model);
   }, [payload?.workers]);
+
+  useEffect(() => {
+    if (payload?.task) setCurrentTask(payload.task);
+  }, [payload?.task]);
 
   const localModels = useMemo(() => {
     if (config?.locals?.length) {
@@ -129,6 +134,8 @@ export function BifrostProvider({ children }) {
         allowLocal: localEnabled,
         allowCloud: cloudEnabled,
       });
+      setCurrentTask(text);
+      setTask("");
       setStatus(`Started run ${run_id}`);
     } catch (e) {
       setStatus(e.message);
@@ -148,6 +155,7 @@ export function BifrostProvider({ children }) {
       await resetWorkspace();
       setStatus("Workspace reset to seed app");
       setTask("");
+      setCurrentTask("");
     } catch (e) {
       setStatus(e.message);
     } finally {
@@ -193,6 +201,7 @@ export function BifrostProvider({ children }) {
       comparisonModels,
       task,
       setTask,
+      currentTask,
       cap,
       setCap,
       status,
@@ -221,6 +230,7 @@ export function BifrostProvider({ children }) {
       comparisonModel,
       comparisonModels,
       task,
+      currentTask,
       cap,
       status,
       busy,

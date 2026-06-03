@@ -12,9 +12,10 @@ bash scripts/verify_release.sh
 LM Studio:
 
 1. Start local server on port **1234**.
-2. Load **LOCAL_MODEL** (e.g. Gemma 4 26B).
-3. Load **LOCAL_MODEL_2** (`gemma-4-e4b`) for dual-local parallel lanes.
-4. `PYTHONPATH=. python scripts/test_local_toolcall.py` → all green.
+2. **Unload** other models; load only **`LOCAL_MODEL`** (default: `gemma-4-26b-a4b-it-mlx`).
+3. Leave **`LOCAL_MODEL_2` unset** in `.env` for demo (single-local). VG.1 is parallel **workers**, not two model IDs at once.
+4. `PYTHONPATH=. python scripts/test_local_toolcall.py` → green for `LOCAL_MODEL`.
+5. If 26b hits resource guard: unload extras in LM Studio or set `LOCAL_MODEL=gemma-4-e4b-it-mlx` and retry.
 
 ## 2. Start stack
 
@@ -45,7 +46,7 @@ Fallback TUI: `docker compose --profile cli run --rm bifrost-cli -i`
 
 **Before 3.1:** `bash scripts/reset_seed.sh` — clean workspace.
 
-**Cap:** `$0.20` per task (default). Do not raise cap to fix BLOCKED/pipe waste — fix prompts first. Only raise cap for a single run if, after a measured attempt, integration needs a few cents and you accept the trade-off (use UI cap field, not `config.toml`).
+**Cap:** `$0.35` for the hero task (integration often needs more than `$0.20`). Default `$0.20` is fine for vignettes. Do not raise cap to fix BLOCKED/pipe waste — fix prompts first.
 
 Paste in web UI **verbatim** (lists all four files → fast path, no router LLM):
 

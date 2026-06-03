@@ -128,6 +128,36 @@ def test_fast_path_tier_classification():
     assert by_file["tests/test_orders.py"].local_tier == "standard"
 
 
+def test_fast_path_single_file_plus_pytest():
+    r = _router()
+    task = (
+        "Add a GET /items endpoint in routers/items.py that returns two hardcoded items.\n"
+        "Register the router in main.py so /health still works.\n"
+        "Make sure pytest passes."
+    )
+    plan = r._fast_decompose(task)
+    assert plan is not None
+    assert plan.mode == 3
+    assert len(plan.workers) == 2
+    by_file = {w.owned_files[0]: w.backend_name for w in plan.workers}
+    assert by_file["routers/items.py"] == "local"
+    assert by_file["tests/test_items.py"] == "cloud"
+
+
+def test_parse_json_trailing_comma_recovery():
+    r = _router()
+    raw = """{
+      "mode": 3,
+      "reasoning": "ok",
+      "workers": [
+        {"role": "coder", "task": "t1", "owned_files": ["a.py"], "backend": "local"},
+      ],
+    }"""
+    plan = r._parse(raw, "test")
+    assert plan.mode == 3
+    assert len(plan.workers) == 1
+
+
 def test_classify_backend_functions():
     from router import _classify_backend, _classify_tier
     assert _classify_backend("tests/test_orders.py") == "cloud"

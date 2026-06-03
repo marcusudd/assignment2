@@ -135,7 +135,7 @@ def _savings_panel(tracker: CostTracker, comparison_models: list[str]) -> Panel:
     )
 
 
-def _gantt_panel(states: list[WorkerState], width: int = 44) -> Panel:
+def _gantt_panel(states: list[WorkerState], width: int = 44, *, live: bool = True) -> Panel:
     """Show each worker as a bar on a shared timeline (VG.1 visual proof).
 
     All bars are anchored to the earliest start_ts, so overlapping bars make
@@ -150,7 +150,10 @@ def _gantt_panel(states: list[WorkerState], width: int = 44) -> Panel:
 
     t0 = min(s.start_ts for s in started)
     now = time.monotonic()
-    t_end = max((s.end_ts or now) for s in started)
+    if live:
+        t_end = max((s.end_ts or now) for s in started)
+    else:
+        t_end = max((s.end_ts or s.start_ts or t0) for s in started)
     span = max(t_end - t0, 0.001)   # avoid div-by-zero
 
     bar_style = {
@@ -164,7 +167,11 @@ def _gantt_panel(states: list[WorkerState], width: int = 44) -> Panel:
             rows.append(f"{ws.worker_id:<11} {icon}  [dim]pending[/dim]")
             continue
         start_off = (ws.start_ts - t0) / span
-        end_off = ((ws.end_ts or now) - t0) / span
+        if live and ws.end_ts is None and ws.status in ("running", "pending"):
+            end_ts = now
+        else:
+            end_ts = ws.end_ts or ws.start_ts or t0
+        end_off = (end_ts - t0) / span
         lead = int(start_off * width)
         length = max(int((end_off - start_off) * width), 1)
         trail = width - lead - length
@@ -241,6 +248,7 @@ class Dashboard:
     def _render(self):
         states = self.registry.snapshot()
         all_done = all(ws.status in ("done", "error", "aborted") for ws in states) if states else False
+        span_live = not all_done and not self.cost_tracker.should_stop()
         status_label = "[green]DONE[/green]" if all_done else "[bold cyan]RUNNING[/bold cyan]"
 
         parts = [
@@ -250,7 +258,7 @@ class Dashboard:
                 border_style="blue",
             ),
             _worker_table(states),
-            _gantt_panel(states),
+            _gantt_panel(states, live=span_live),
             _cost_bar(self.cost_tracker),
             Panel(self.routing_summary, title="Router decision", border_style="dim"),
             _savings_panel(self.cost_tracker, self.comparison_models),

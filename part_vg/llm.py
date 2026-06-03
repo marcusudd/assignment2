@@ -7,6 +7,23 @@ from typing import Any
 
 from openai import APIError, OpenAI
 
+_RESOURCE_GUARD_MARKERS = (
+    "insufficient system resources",
+    "model loading was stopped",
+)
+
+
+def _log_api_error(model: str, base_url: str, err: APIError) -> None:
+    msg = str(err).lower()
+    if any(m in msg for m in _RESOURCE_GUARD_MARKERS):
+        print(
+            f"[llm] LM Studio resource guard for {model!r} — "
+            "use single-local (one model loaded) or unload other models in LM Studio",
+            file=sys.stderr,
+        )
+    else:
+        print(f"[llm] API error ({model!r} @ {base_url}): {err}", file=sys.stderr)
+
 
 def call_llm(
     messages: list[dict],
@@ -33,7 +50,7 @@ def call_llm(
         completion_tokens = response.usage.completion_tokens if response.usage else 0
         return response, prompt_tokens, completion_tokens
     except APIError as e:
-        print(f"[llm] API error: {e}", file=sys.stderr)
+        _log_api_error(model, base_url, e)
         return None, 0, 0
     except Exception as e:
         print(f"[llm] unexpected error ({type(e).__name__}): {e}", file=sys.stderr)

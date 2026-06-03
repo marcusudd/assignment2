@@ -34,9 +34,8 @@ have each written one file. Your job:
 3. Register any new routers/modules in the app's main entry point
    (e.g. app.include_router(...) in main.py).
 4. Run the test suite with bash: python3 -m pytest tests/ -x -q
-   Bash rules: ONE command, no |, no &&, no ||, no ; .
-   NEVER: test -f file && echo, cmd || echo, ls file 2>/dev/null || echo.
-   Use read_file to check if a path exists.
+   Pipes (|), && and || are allowed. Semicolons (;) and background (&) are blocked.
+   python3 -c "import x; print(x)" is fine (semicolons inside quotes are not blocked).
 5. If tests fail, apply the minimal fix to make them pass and re-run.
 6. Reply with a short summary: what you fixed and whether tests passed.
 
@@ -109,6 +108,7 @@ class Orchestrator:
             f"({len(self.plan.workers)} worker(s))"
         )
         self.registry.set_routing(self.plan.mode, self.routing_summary)
+        self.registry.append_run_log(f"🔀 Router: {self.routing_summary}")
         print(f"[orchestrator] {self.routing_summary}", file=sys.stderr)
 
         if self.plan.mode == 1:

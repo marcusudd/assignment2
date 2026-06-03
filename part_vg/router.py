@@ -36,6 +36,10 @@ _MULTI_RE = re.compile(
 )
 
 _TEST_RE = re.compile(r'(?:^tests?/|/tests?/|^test_|/test_|_test\.py$|conftest\.py$)', re.IGNORECASE)
+_MULTI_FILE_SIGNALS = re.compile(
+    r"\b(?:register|pytest|main\.py|app\.py|tests?/)\b",
+    re.IGNORECASE,
+)
 _BOILERPLATE_DIRS = {"models", "schemas", "migrations", "db", "config"}
 _BOILERPLATE_FILES = {"__init__.py", "constants.py", "enums.py", "types.py"}
 
@@ -123,14 +127,54 @@ class Router:
 
     # ------------------------------------------------------------------
     def _fast_decompose(self, task: str) -> Plan | None:
-        """If task explicitly names 2+ .py files, decompose without LLM."""
-        files = re.findall(r'(?:[\w/-]+/)?[\w-]+\.py', task)
-        # Deduplicate, filter out shared files the orchestrator owns
+        """If task names 2+ .py files (or 1 + pytest/register), decompose without LLM."""
         skip = {"main.py", "app.py", "__init__.py", "conftest.py"}
-        files = [f for f in dict.fromkeys(files) if Path(f).name not in skip]
-        if len(files) < 2:
+        all_py = re.findall(r'(?:[\w/-]+/)?[\w-]+\.py', task)
+        named = [f for f in dict.fromkeys(all_py) if Path(f).name not in skip]
+
+        if len(named) < 2:
+            single = self._fast_decompose_single_named(task, named, skip)
+            if single:
+                return single
             return None
 
+        return self._plan_from_files(task, named)
+
+    def _fast_decompose_single_named(
+        self, task: str, named: list[str], skip: set[str]
+    ) -> Plan | None:
+        """One implementation file + pytest/register/main → add inferred test worker."""
+        if len(named) != 1 or not self._implies_multi_file_work(task):
+            return None
+
+        f = named[0]
+        extra: list[str] = []
+        for path in re.findall(r'(?:[\w/-]+/)?[\w-]+\.py', task):
+            if _TEST_RE.search(path) and path not in named and Path(path).name not in skip:
+                extra.append(path)
+        if not extra and re.search(r"\bpytest\b", task, re.IGNORECASE):
+            inferred = self._infer_test_file(f)
+            if inferred not in named:
+                extra.append(inferred)
+
+        files = named + [p for p in extra if p not in named]
+        if len(files) < 2:
+            return None
+        return self._plan_from_files(task, files)
+
+    def _implies_multi_file_work(self, task: str) -> bool:
+        if _MULTI_FILE_SIGNALS.search(task):
+            return True
+        return bool(_MULTI_RE.search(task)) and bool(
+            re.search(r"\b(?:register|main\.py)\b", task, re.IGNORECASE)
+        )
+
+    @staticmethod
+    def _infer_test_file(source_py: str) -> str:
+        stem = Path(source_py).stem
+        return f"tests/test_{stem}.py"
+
+    def _plan_from_files(self, task: str, files: list[str]) -> Plan:
         used: dict[str, int] = {}
         workers = [
             WorkerPlan(
@@ -190,13 +234,26 @@ class Router:
         raw = (response.choices[0].message.content or "").strip()
         return self._parse(raw, task)
 
-    def _parse(self, raw: str, task: str) -> Plan:
-        # Strip markdown fences if present
+    def _parse_json(self, raw: str) -> dict | None:
         cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw.strip(), flags=re.MULTILINE)
-        try:
-            data = json.loads(cleaned)
-        except json.JSONDecodeError as e:
-            print(f"[router] JSON parse error: {e} — falling back to mode 2", file=sys.stderr)
+        no_trailing_commas = re.sub(r",\s*]", "]", re.sub(r",\s*}", "}", cleaned))
+        for candidate in (cleaned, no_trailing_commas):
+            try:
+                return json.loads(candidate)
+            except json.JSONDecodeError:
+                continue
+        match = re.search(r"\{.*\}", cleaned, re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group(0))
+            except json.JSONDecodeError:
+                pass
+        return None
+
+    def _parse(self, raw: str, task: str) -> Plan:
+        data = self._parse_json(raw)
+        if data is None:
+            print("[router] JSON parse error — falling back to mode 2", file=sys.stderr)
             return self._fallback_mode2(task)
 
         mode = int(data.get("mode", 2))

@@ -4,7 +4,13 @@ from backends import BackendSpec
 from config import Config, BackendConfig
 from cost import CostTracker
 from state import StateRegistry
-from subagent import SubAgent, WorkerPlan
+from subagent import (
+    SubAgent,
+    WorkerPlan,
+    _BASE_MAX_TOKENS,
+    _HIGH_MAX_TOKENS,
+    _MAX_MAX_TOKENS,
+)
 
 
 def _local_spec() -> BackendSpec:
@@ -66,6 +72,91 @@ def _make_response(tool_name: str = "edit_file", tool_args: str = '{"path":"x.py
     response = MagicMock()
     response.choices = [choice]
     return response
+
+
+def test_initial_max_tokens_test_file_coder():
+    agent = _make_agent()
+    assert agent._initial_max_tokens() == _HIGH_MAX_TOKENS
+
+
+def test_initial_max_tokens_non_test_coder():
+    plan = WorkerPlan(
+        worker_id="midgard.models-order",
+        role="coder",
+        task="implement models",
+        owned_files=["models/order.py"],
+        backend_name="local",
+    )
+    agent = SubAgent(
+        plan=plan,
+        active_backend=_local_spec(),
+        cloud_backend=_cloud_spec(),
+        cost_tracker=CostTracker(cap_usd=10.0, prices_path="model_prices.json"),
+        registry=StateRegistry(),
+        config=_config(),
+        system_prompt="You are a coder.",
+    )
+    assert agent._initial_max_tokens() == _BASE_MAX_TOKENS
+
+
+def test_initial_max_tokens_integrator():
+    plan = WorkerPlan(
+        worker_id="asgard.integration",
+        role="integrator",
+        task="integrate",
+        owned_files=[],
+        backend_name="cloud",
+    )
+    agent = SubAgent(
+        plan=plan,
+        active_backend=_cloud_spec(),
+        cloud_backend=_cloud_spec(),
+        cost_tracker=CostTracker(cap_usd=10.0, prices_path="model_prices.json"),
+        registry=StateRegistry(),
+        config=_config(),
+        system_prompt="You are an integrator.",
+    )
+    assert agent._initial_max_tokens() == _HIGH_MAX_TOKENS
+
+
+def test_length_truncation_retries_with_higher_max_tokens():
+    agent = _make_cloud_agent()
+    max_tokens_seen = []
+
+    def fake_llm(*args, **kwargs):
+        max_tokens_seen.append(kwargs.get("max_tokens"))
+        if len(max_tokens_seen) == 1:
+            msg = MagicMock()
+            msg.content = None
+            msg.tool_calls = [MagicMock()]
+            msg.tool_calls[0].id = "tc1"
+            msg.tool_calls[0].function.name = "bash"
+            msg.tool_calls[0].function.arguments = '{"command": "echo ok"}'
+            choice = MagicMock()
+            choice.message = msg
+            choice.finish_reason = "length"
+            response = MagicMock()
+            response.choices = [choice]
+            return response, 10, 5
+        success = MagicMock()
+        success_msg = MagicMock()
+        success_msg.content = "Done."
+        success_msg.tool_calls = None
+        success_choice = MagicMock()
+        success_choice.message = success_msg
+        success_choice.finish_reason = "stop"
+        success.choices = [success_choice]
+        return success, 5, 3
+
+    with patch("subagent.call_llm", side_effect=fake_llm), \
+         patch("subagent.dispatch_tool", return_value="(no output)"), \
+         patch("subagent.compact_if_needed", return_value=False):
+        result = agent._loop()
+
+    assert result == "Done."
+    assert max_tokens_seen[0] == _HIGH_MAX_TOKENS
+    assert max_tokens_seen[1] == min(_HIGH_MAX_TOKENS + 4096, _MAX_MAX_TOKENS)
+    assert len(agent.history) == 1
 
 
 def test_three_consecutive_failures_trigger_escalation():
@@ -134,3 +225,43 @@ def test_success_resets_failure_counter():
     # 2 errors then a success → counter reset → no escalation from thrash
     assert agent._escalated is False
     assert agent._consecutive_tool_failures == 0
+
+
+def _make_cloud_agent() -> SubAgent:
+    plan = WorkerPlan(
+        worker_id="asgard.tests",
+        role="coder",
+        task="write tests",
+        owned_files=["tests/test_x.py"],
+        backend_name="cloud",
+        local_tier="standard",
+    )
+    return SubAgent(
+        plan=plan,
+        active_backend=_cloud_spec(),
+        cloud_backend=_cloud_spec(),
+        cost_tracker=CostTracker(cap_usd=10.0, prices_path="model_prices.json"),
+        registry=StateRegistry(),
+        config=_config(),
+        system_prompt="You are a coder.",
+    )
+
+
+def test_cloud_circuit_breaker_aborts_after_five_failures():
+    agent = _make_cloud_agent()
+    assert agent._active.is_local is False
+
+    error_result = "ERROR: invalid tool argument JSON from model"
+    call_count = [0]
+
+    def fake_llm(*args, **kwargs):
+        call_count[0] += 1
+        return _make_response(tool_name="bash", tool_args="{}"), 10, 5
+
+    with patch("subagent.call_llm", side_effect=fake_llm), \
+         patch("subagent.dispatch_tool", return_value=error_result), \
+         patch("subagent.compact_if_needed", return_value=False):
+        result = agent._loop()
+
+    assert "Aborted: repeated tool failures on cloud worker" in result
+    assert call_count[0] <= 6

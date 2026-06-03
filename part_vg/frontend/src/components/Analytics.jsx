@@ -1,64 +1,117 @@
-import { useMemo, useState } from "react";
-import { Activity, ChevronDown, ChevronRight } from "lucide-react";
+import { useMemo, useState, useEffect } from "react";
+import { Activity } from "lucide-react";
 import { useBifrost } from "../BifrostContext.jsx";
 import LogEntry from "./LogEntry.jsx";
+import { sortEventsByTs } from "../utils/logFormat.js";
 import { workerDisplayLabel, workerShortId } from "../utils/workerLabel.js";
 
-function LiveCurveChart({ points }) {
+function TimeSeriesChart({ title, points, yMax, ySuffix = "", emptyHint }) {
   const width = 280;
-  const height = 72;
-  const max = Math.max(...points, 1);
-  const min = Math.min(...points, 0);
+  const height = 88;
+  const values = points.map((p) => p.v);
+  const hasData = values.length > 0;
+  const max = Math.max(yMax ?? 0, ...values, 1);
+  const min = 0;
   const range = max - min || 1;
 
-  const coords = points.map((v, i) => {
+  const coords = points.map((p, i) => {
     const x = (i / Math.max(points.length - 1, 1)) * width;
-    const y = height - ((v - min) / range) * (height - 8) - 4;
+    const y = height - ((p.v - min) / range) * (height - 10) - 5;
     return `${x},${y}`;
   });
 
-  const linePath = coords.length ? `M ${coords.join(" L ")}` : `M 0,${height}`;
-  const areaPath = `${linePath} L ${width},${height} L 0,${height} Z`;
+  const linePath = coords.length ? `M ${coords.join(" L ")}` : "";
+  const areaPath = linePath
+    ? `${linePath} L ${width},${height} L 0,${height} Z`
+    : "";
+
+  const latest = points[points.length - 1];
 
   return (
     <div className="chart-card">
-      <p className="mb-2 text-xs font-medium text-white/45">Cost trend</p>
-      <svg viewBox={`0 0 ${width} ${height}`} className="w-full" aria-hidden>
-        <defs>
-          <linearGradient id="curveFill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#7dff5a" stopOpacity="0.4" />
-            <stop offset="60%" stopColor="#39ff14" stopOpacity="0.12" />
-            <stop offset="100%" stopColor="#1b4322" stopOpacity="0" />
-          </linearGradient>
-          <linearGradient id="curveLine" x1="0" y1="0%" x2="100%" y2="0%">
-            <stop offset="0%" stopColor="#1b4322" />
-            <stop offset="40%" stopColor="#39ff14" />
-            <stop offset="100%" stopColor="#7dff5a" />
-          </linearGradient>
-          <filter id="curveGlow" x="-10%" y="-10%" width="120%" height="120%">
-            <feGaussianBlur stdDeviation="1.5" result="blur" />
-            <feMerge>
-              <feMergeNode in="blur" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
-        </defs>
-        <path d={areaPath} fill="url(#curveFill)" />
-        <path
-          d={linePath}
-          fill="none"
-          stroke="url(#curveLine)"
-          strokeWidth="2.5"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          filter="url(#curveGlow)"
-        />
-      </svg>
+      <div className="mb-2 flex items-baseline justify-between gap-2">
+        <p className="text-xs font-medium text-white/45">{title}</p>
+        {latest != null && (
+          <span className="font-mono text-sm font-semibold text-bifrost">
+            {latest.v.toFixed(1)}
+            {ySuffix}
+          </span>
+        )}
+      </div>
+      {!hasData ? (
+        <p className="py-6 text-center text-[11px] text-white/35">{emptyHint}</p>
+      ) : (
+        <svg viewBox={`0 0 ${width} ${height}`} className="w-full" aria-hidden>
+          <defs>
+            <linearGradient id="tsFill" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#7dff5a" stopOpacity="0.35" />
+              <stop offset="100%" stopColor="#1b4322" stopOpacity="0" />
+            </linearGradient>
+            <linearGradient id="tsLine" x1="0" y1="0%" x2="100%" y2="0%">
+              <stop offset="0%" stopColor="#1b4322" />
+              <stop offset="50%" stopColor="#39ff14" />
+              <stop offset="100%" stopColor="#7dff5a" />
+            </linearGradient>
+          </defs>
+          {[0.25, 0.5, 0.75, 1].map((frac) => (
+            <line
+              key={frac}
+              x1="0"
+              y1={height - frac * (height - 10) - 5}
+              x2={width}
+              y2={height - frac * (height - 10) - 5}
+              stroke="rgba(255,255,255,0.04)"
+              strokeWidth="1"
+            />
+          ))}
+          {areaPath && <path d={areaPath} fill="url(#tsFill)" />}
+          {linePath && (
+            <path
+              d={linePath}
+              fill="none"
+              stroke="url(#tsLine)"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          )}
+        </svg>
+      )}
+      {hasData && (
+        <p className="mt-1 font-mono text-[9px] text-white/30">
+          elapsed {latest?.t?.toFixed(1) ?? 0}s · {points.length} samples
+        </p>
+      )}
     </div>
   );
 }
 
-function LatencyGauge({ value, max = 200 }) {
+function useLiveMetricHistory(runId, elapsed, value, resetWhen, live = true) {
+  const [points, setPoints] = useState([]);
+
+  useEffect(() => {
+    setPoints([]);
+  }, [runId, resetWhen]);
+
+  useEffect(() => {
+    if (!live || value == null || Number.isNaN(value)) return;
+    setPoints((prev) => {
+      const last = prev[prev.length - 1];
+      if (
+        last &&
+        Math.abs(last.v - value) < 0.05 &&
+        Math.abs(last.t - elapsed) < 0.15
+      ) {
+        return prev;
+      }
+      return [...prev, { t: elapsed, v: value }].slice(-80);
+    });
+  }, [value, elapsed, live]);
+
+  return points;
+}
+
+function LatencyGauge({ value, max = 200, live = true }) {
   const pct = Math.min(100, (value / max) * 100);
   const r = 36;
   const circ = 2 * Math.PI * r;
@@ -111,8 +164,12 @@ function LatencyGauge({ value, max = 200 }) {
         </span>
       </div>
       <div>
-        <p className="text-sm font-medium text-slate-300">Worker span</p>
-        <p className="font-mono text-xs text-slate-500">max lane duration</p>
+        <p className="text-sm font-medium text-slate-300">
+          Worker span{live ? "" : " · frozen"}
+        </p>
+        <p className="font-mono text-xs text-slate-500">
+          {live ? "max lane duration (live)" : "final run duration"}
+        </p>
         <p className="mt-1 text-lg font-semibold text-bifrost/90">
           {Math.round(value)}
           <span className="text-xs font-normal text-slate-500"> s</span>
@@ -197,9 +254,8 @@ function TokensBarChart({ workers }) {
   );
 }
 
-function WorkerLaneLogs({ workers, events }) {
-  const [open, setOpen] = useState(true);
-  const byWorker = useMemo(() => {
+function WorkerLogTabs({ workers, events }) {
+  const lanes = useMemo(() => {
     const map = new Map();
     for (const w of workers) {
       map.set(w.id, { worker: w, events: [] });
@@ -211,50 +267,114 @@ function WorkerLaneLogs({ workers, events }) {
       }
       map.get(wid).events.push(ev);
     }
-    return [...map.values()].filter((lane) => lane.events.length > 0);
+    return [...map.values()].sort((a, b) => {
+      const aRun = a.worker.status === "running" ? 0 : 1;
+      const bRun = b.worker.status === "running" ? 0 : 1;
+      return aRun - bRun || a.worker.id.localeCompare(b.worker.id);
+    });
   }, [workers, events]);
 
-  if (byWorker.length === 0) return null;
+  const [activeTab, setActiveTab] = useState("all");
+  const [realmFilter, setRealmFilter] = useState("all");
+
+  useEffect(() => {
+    if (activeTab === "all") return;
+    if (!lanes.some((lane) => lane.worker.id === activeTab)) {
+      setActiveTab("all");
+    }
+  }, [lanes, activeTab]);
+
+  const realmFilteredEvents = useMemo(() => {
+    if (realmFilter === "all") return events;
+    if (realmFilter === "bifrost") {
+      return events.filter((ev) => ev.realm === "bifrost" || ev.kind === "routing");
+    }
+    return events.filter((ev) => ev.realm === realmFilter);
+  }, [events, realmFilter]);
+
+  const filteredEvents = useMemo(() => {
+    const base =
+      activeTab === "all"
+        ? realmFilteredEvents
+        : lanes.find((lane) => lane.worker.id === activeTab)?.events ?? [];
+    return sortEventsByTs(base);
+  }, [activeTab, lanes, realmFilteredEvents]);
+
+  if (events.length === 0 && lanes.length === 0) {
+    return (
+      <div className="glass-card p-3">
+        <p className="mb-2 text-xs font-medium text-white/45">Worker logs</p>
+        <p className="text-[11px] text-white/35">
+          Events appear when a run is active.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="glass-card p-3">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="mb-2 flex w-full items-center gap-1.5 text-left text-xs font-medium text-white/50"
-      >
-        {open ? (
-          <ChevronDown className="h-3.5 w-3.5 shrink-0" />
+      <p className="mb-2 text-xs font-medium text-white/45">Worker logs</p>
+      <div className="mb-2 flex flex-wrap gap-1.5">
+        {[
+          ["all", "All realms"],
+          ["bifrost", "Router"],
+          ["midgard", "Midgard"],
+          ["asgard", "Asgard"],
+        ].map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            onClick={() => setRealmFilter(id)}
+            className={`worker-tab ${realmFilter === id ? "worker-tab-active" : ""}`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      <div className="mb-3 flex flex-wrap gap-1.5">
+        <button
+          type="button"
+          onClick={() => setActiveTab("all")}
+          className={`worker-tab ${activeTab === "all" ? "worker-tab-active" : ""}`}
+        >
+          All ({events.length})
+        </button>
+        {lanes.map(({ worker, events: laneEvents }) => {
+          const isRunning = worker.status === "running";
+          return (
+            <button
+              key={worker.id}
+              type="button"
+              onClick={() => setActiveTab(worker.id)}
+              title={worker.id}
+              className={`worker-tab max-w-[120px] truncate ${
+                activeTab === worker.id ? "worker-tab-active" : ""
+              } ${isRunning ? "worker-tab-running" : ""}`}
+            >
+              {workerDisplayLabel(worker)} ({laneEvents.length})
+            </button>
+          );
+        })}
+      </div>
+      <ul className="max-h-56 space-y-2 overflow-y-auto scrollbar-thin">
+        {filteredEvents.length === 0 ? (
+          <li className="text-[11px] text-white/35">No events for this worker.</li>
         ) : (
-          <ChevronRight className="h-3.5 w-3.5 shrink-0" />
+          filteredEvents.map((ev, i) => (
+            <LogEntry
+              key={`${activeTab}-${realmFilter}-${i}`}
+              worker={activeTab === "all" ? ev.worker : null}
+              text={ev.text}
+              kind={ev.kind}
+              ts={ev.ts}
+              realm={ev.realm}
+            />
+          ))
         )}
-        Per-worker activity (Bifrost log)
-      </button>
-      {open && (
-        <div className="max-h-56 space-y-3 overflow-y-auto scrollbar-thin">
-          {byWorker.map(({ worker, events: laneEvents }) => (
-            <div key={worker.id}>
-              <p className="mb-1.5 truncate font-mono text-[10px] font-semibold text-bifrost/90">
-                {worker.id}
-              </p>
-              <ul className="space-y-1">
-                {laneEvents.slice(-6).map((ev, i) => (
-                  <LogEntry
-                    key={`${worker.id}-${i}`}
-                    worker={null}
-                    text={ev.text}
-                    kind={ev.kind}
-                  />
-                ))}
-              </ul>
-            </div>
-          ))}
-        </div>
-      )}
+      </ul>
       <p className="mt-2 text-[9px] leading-relaxed text-white/30">
-        Each worker calls LM Studio or OpenRouter in its own thread. Raw provider
-        chats stay in those tools; this is Bifrost&apos;s orchestrator log (tools,
-        blocks, compaction).
+        Filter by realm (Router / Midgard / Asgard) or pick a worker tab.
+        Router shows delegation; Midgard/Asgard show lane activity.
       </p>
     </div>
   );
@@ -279,17 +399,8 @@ export default function Analytics() {
   const savings = payload?.savings ?? [];
   const events = payload?.events ?? [];
 
-  const workerSpanSec = useMemo(() => {
-    if (!workers.length) return 0;
-    const ends = workers.map((w) => w.end ?? 0).filter((e) => e > 0);
-    return ends.length ? Math.max(...ends) : 0;
-  }, [workers]);
-
-  const costHistory = useMemo(() => {
-    const total = cost?.total ?? 0;
-    const base = Math.max(total * 0.6, 0.01);
-    return [base, base * 1.1, base * 1.05, total || base * 1.2, total];
-  }, [cost?.total]);
+  const workerSpanSec = payload?.metrics?.span_sec ?? 0;
+  const spanLive = payload?.metrics?.span_live ?? false;
 
   const selectedSaving = useMemo(
     () => savings.find((s) => s.model === comparisonModel),
@@ -300,9 +411,25 @@ export default function Analytics() {
   const localSaved = selectedSaving?.local_saved ?? 0;
   const routingSaved = selectedSaving?.routing_saved ?? 0;
   const savePct = cloudBaseline
-    ? Math.min(100, (costSaved / cloudBaseline) * 100)
+    ? Math.min(100, Math.max(0, (costSaved / cloudBaseline) * 100))
     : 0;
+  const budgetPct = Math.min(100, (cost?.fraction ?? 0) * 100);
   const costIsNegative = costSaved <= 0 && cloudBaseline > 0;
+
+  const savingsHistory = useLiveMetricHistory(
+    payload?.run_id,
+    workerSpanSec,
+    savePct,
+    comparisonModel,
+    spanLive,
+  );
+  const spendHistory = useLiveMetricHistory(
+    payload?.run_id,
+    workerSpanSec,
+    budgetPct,
+    "budget",
+    spanLive,
+  );
 
   return (
     <aside className="glass-panel flex h-full min-h-0 flex-col overflow-hidden">
@@ -320,10 +447,23 @@ export default function Analytics() {
         </header>
 
         <div className="mb-4 space-y-4">
-          <LiveCurveChart points={costHistory} />
-          <LatencyGauge value={workerSpanSec} max={15} />
+          <TimeSeriesChart
+            title={`Savings vs ${shortModelId(comparisonModel)} (live %)`}
+            points={savingsHistory}
+            yMax={100}
+            ySuffix="%"
+            emptyHint="Start a run to track savings % over time"
+          />
+          <TimeSeriesChart
+            title="Budget cap used (live %)"
+            points={spendHistory}
+            yMax={100}
+            ySuffix="%"
+            emptyHint="Budget usage appears during a run"
+          />
+          <LatencyGauge value={workerSpanSec} max={15} live={spanLive} />
           <TokensBarChart workers={workers} />
-          <WorkerLaneLogs workers={workers} events={events} />
+          <WorkerLogTabs workers={workers} events={events} />
 
           <div className="glass-card overflow-hidden p-4">
             <div className="mb-2 flex items-center justify-between gap-2">
@@ -383,6 +523,7 @@ export default function Analytics() {
             <p className="mb-1 text-xs text-slate-500">
               Actual spend: ${(cost?.total ?? 0).toFixed(4)}
               {" · "}baseline: ${cloudBaseline > 0 ? cloudBaseline.toFixed(2) : "—"}
+              {" · "}budget: {Math.round(budgetPct)}% of cap
               {cost?.warning && " · ⚠ near cap"}
               {cost?.stopped && " · 🛑 cap hit"}
             </p>
@@ -390,10 +531,15 @@ export default function Analytics() {
               <div
                 className="h-full rounded-full transition-all duration-500"
                 style={{
-                  width: `${Math.max(costIsNegative ? 0 : savePct, cost?.fraction ? cost.fraction * 100 : 0)}%`,
+                  width: `${budgetPct}%`,
                   background:
-                    "linear-gradient(90deg, #1b4322 0%, #39ff14 70%, #5dff4a 100%)",
-                  boxShadow: "0 0 12px rgba(57,255,20,0.35)",
+                    budgetPct >= 90
+                      ? "linear-gradient(90deg, #7f1d1d 0%, #ef4444 70%, #fca5a5 100%)"
+                      : "linear-gradient(90deg, #1b4322 0%, #39ff14 70%, #5dff4a 100%)",
+                  boxShadow:
+                    budgetPct >= 90
+                      ? "0 0 12px rgba(239,68,68,0.35)"
+                      : "0 0 12px rgba(57,255,20,0.35)",
                 }}
               />
             </div>
@@ -401,26 +547,6 @@ export default function Analytics() {
               <span>$0 spent</span>
               <span>${cost?.cap?.toFixed(2) ?? "—"} cap</span>
             </div>
-          </div>
-
-          <div className="glass-card p-3">
-            <p className="mb-2 text-xs font-medium text-white/45">Session log</p>
-            {events.length === 0 ? (
-              <p className="text-[11px] text-white/35">
-                Events appear when a run is active.
-              </p>
-            ) : (
-              <ul className="max-h-48 space-y-2 overflow-y-auto scrollbar-thin">
-                {events.map((ev, i) => (
-                  <LogEntry
-                    key={i}
-                    worker={ev.worker}
-                    text={ev.text}
-                    kind={ev.kind}
-                  />
-                ))}
-              </ul>
-            )}
           </div>
         </div>
       </div>

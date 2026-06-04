@@ -20,7 +20,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -359,7 +359,7 @@ def api_reset() -> dict:
             )
         _current = None
 
-    script = _HERE / "scripts" / "reset_seed.sh"
+    script = _HERE / "scripts" / "clear_workspace.sh"
     subprocess.run(["bash", str(script)], check=False, cwd=str(_HERE))
     return {"ok": True}
 
@@ -433,6 +433,45 @@ async def api_events() -> StreamingResponse:
     )
 
 
+_frontend_public = _HERE / "frontend" / "public"
 _dist = _HERE / "frontend" / "dist"
+
+
+def _frontend_asset(name: str) -> Path | None:
+    """Favicon etc. — prefer built dist, fall back to public/ (dev without rebuild)."""
+    for base in (_dist, _frontend_public):
+        path = base / name
+        if path.is_file():
+            return path
+    return None
+
+
+@app.get("/favicon.svg", include_in_schema=False)
+async def favicon_svg() -> FileResponse:
+    path = _frontend_asset("favicon.svg")
+    if path is None:
+        raise HTTPException(status_code=404, detail="favicon not found")
+    return FileResponse(path, media_type="image/svg+xml")
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon_ico() -> FileResponse:
+    path = _frontend_asset("favicon.ico")
+    if path is not None:
+        return FileResponse(path, media_type="image/x-icon")
+    svg = _frontend_asset("favicon.svg")
+    if svg is None:
+        raise HTTPException(status_code=404, detail="favicon not found")
+    return FileResponse(svg, media_type="image/svg+xml")
+
+
+@app.get("/apple-touch-icon.png", include_in_schema=False)
+async def apple_touch_icon() -> FileResponse:
+    path = _frontend_asset("apple-touch-icon.png")
+    if path is None:
+        raise HTTPException(status_code=404, detail="apple-touch-icon not found")
+    return FileResponse(path, media_type="image/png")
+
+
 if _dist.is_dir():
     app.mount("/", StaticFiles(directory=str(_dist), html=True), name="frontend")

@@ -662,7 +662,7 @@ export default function MainHub() {
                 type="button"
                 onClick={handleReset}
                 disabled={busy || running || isMock}
-                title="Reset workspace"
+                title="Rensa workspace"
                 className="glass-card rounded-xl p-2 text-white/45 transition-all duration-300 hover:text-bifrost disabled:opacity-40"
               >
                 <RotateCcw className="h-4 w-4" />

@@ -1,0 +1,6 @@
+{
+  "response_delay": 1,
+  "poll_interval": 4,
+  "msg_cap": 10,
+  "token_cap": 150000
+}

@@ -1,0 +1,3 @@
+npm warn Unknown env config "devdir". This will stop working in the next major version of npm. See `npm help npmrc` for supported config options.
+npm error could not determine executable to run
+npm error A complete log of this run can be found in: /var/folders/t7/j2krc_3j6mq19fq5rsv4czcr0000gn/T/cursor-sandbox-cache/b81ba95d1df4668575d30fee22d3de3c/npm/_logs/2026-06-04T11_02_42_557Z-debug-0.log

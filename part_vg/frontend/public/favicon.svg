@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Bifrost">
+  <defs>
+    <filter id="nodeGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="1.2" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+  </defs>
+  <rect width="32" height="32" rx="7" fill="#050705" />
+  <path
+    d="M 11 7 L 11 25 M 11 7 L 21 12 L 11 17 M 11 17 L 20 22 L 11 25"
+    fill="none"
+    stroke="#1b4322"
+    stroke-width="2.25"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <path
+    d="M 11 7 L 21 12 L 11 17"
+    fill="none"
+    stroke="#39ff14"
+    stroke-width="2.25"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <circle cx="21" cy="12" r="3" fill="#7dff5a" filter="url(#nodeGlow)" />
+</svg>

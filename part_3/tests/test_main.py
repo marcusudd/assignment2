@@ -638,27 +638,24 @@ class TestAutosummaryHelpers:
         out = agent._build_autosummary(
             ["ran `cat > hello.py`"], ["hello.py"],
         )
-        assert "[auto-summary]" in out
+        assert "Klar med: `hello.py`" in out
         assert "```python" in out
         assert "print('hi')" in out
 
-    def test_build_autosummary_summarizes_large_file(self, tmp_path, monkeypatch):
+    def test_build_autosummary_splits_large_file(self, tmp_path, monkeypatch):
         monkeypatch.setattr(agent, "WORKSPACE_DIR", str(tmp_path))
         (tmp_path / "big.py").write_text("x = 1\n" * 800, encoding="utf-8")
         out = agent._build_autosummary(["ran `cat > big.py`"], ["big.py"])
-        assert "```" not in out
-        assert "full file on workspace" in out
+        assert "big.py" in out
+        assert "```" in out
+        assert "part 1/" in out or len(out) > 1000
 
     def test_build_autosummary_no_files(self):
-        out = agent._build_autosummary(["read `app.py`"], [])
-        assert out.startswith("[auto-summary]")
-        assert "```" not in out
+        assert agent._build_autosummary(["read `app.py`"], []) == "PASS"
 
     def test_build_autosummary_missing_file_safe(self, tmp_path, monkeypatch):
         monkeypatch.setattr(agent, "WORKSPACE_DIR", str(tmp_path))
-        out = agent._build_autosummary(["edited `gone.py`"], ["gone.py"])
-        assert out.startswith("[auto-summary]")
-        assert "```" not in out
+        assert agent._build_autosummary(["edited `gone.py`"], ["gone.py"]) == "PASS"
 
 
 class TestWorkspaceGap:
@@ -714,6 +711,75 @@ class TestDelegation:
         name = main.AGENT_NAME
         msgs = [{"agent_name": "macmini2", "content": f"Great work @{name}"}]
         assert main.was_delegated_to_me(msgs) is False
+
+    def test_delegated_visible_in_ctx_not_batch(self):
+        name = main.AGENT_NAME
+        history = [
+            {
+                "agent_name": "igor-petersson-agent",
+                "content": f"@{name} please implement error handling module",
+            },
+        ]
+        batch = [{"agent_name": "oliver_agent", "content": "working on UI"}]
+        assert not main.was_delegated_to_me(batch)
+        assert main.was_delegated_to_me(batch, ctx=history + batch)
+
+
+class TestGoRelease:
+    PM = "igor-petersson-agent"
+
+    def test_go_alone(self):
+        msgs = [{"agent_name": self.PM, "content": "All agents:\nGO\n"}]
+        assert main.manager_work_released(msgs, self.PM)
+
+    def test_go_ahead_from_manager(self):
+        msgs = [{"agent_name": self.PM, "content": "Go ahead and implement your tasks"}]
+        assert main.manager_work_released(msgs, self.PM)
+
+    def test_start_coding_from_manager(self):
+        msgs = [{"agent_name": self.PM, "content": "Start coding — assignments above"}]
+        assert main.manager_work_released(msgs, self.PM)
+
+    def test_agent_assignment_line_from_manager(self):
+        msgs = [
+            {
+                "agent_name": self.PM,
+                "content": "- oliver_agent: Implement UI components with responsive design.",
+            },
+        ]
+        assert main.manager_work_released(msgs, self.PM)
+
+    def test_agent_assignment_no_release_from_random_peer(self):
+        text = "- oliver_agent: Implement UI components"
+        msgs = [{"agent_name": "oliver_agent", "content": text}]
+        assert not main.manager_work_released(msgs, self.PM)
+
+    def test_frozen_clears_after_go_ahead(self):
+        msgs = [
+            {
+                "agent_name": "human:Igor",
+                "content": "DO NOT START WORKING UNTIL THE MANAGER SAYS SO.",
+            },
+            {"agent_name": self.PM, "content": "Go ahead and implement your claimed tasks"},
+        ]
+        assert not main.development_frozen_by_manager(msgs, self.PM)
+
+    def test_frozen_until_manager_assigns_in_close_msg(self):
+        msgs = [
+            {
+                "agent_name": "human:Igor",
+                "content": "DO NOT START WORKING UNTIL THE MANAGER SAYS SO.",
+            },
+            {
+                "agent_name": self.PM,
+                "content": (
+                    "Roster collection concluded.\n"
+                    "- oliver_agent: Implement UI components.\n"
+                    "Others may claim remaining tasks once open."
+                ),
+            },
+        ]
+        assert not main.development_frozen_by_manager(msgs, self.PM)
 
 
 class TestSuppressAutosum:
@@ -1215,6 +1281,331 @@ class TestCodeTransferRoundTrip:
         assert "incomplete split" in state.peer_file_issues.get("partial.py", "")
 
 
+class TestHubDiscipline:
+    @pytest.mark.parametrize("text", [
+        "all agent STOP NOW",
+        "All agents, stop work",
+        "Please stop talking in the group chat",
+        "Everyone stop posting now",
+        "Agents, stop responding",
+        "Do not post until I say so",
+        "Be quiet all agents",
+    ])
+    def test_human_stop_phrasings(self, text):
+        assert main.is_human_stop_directive(text)
+
+    @pytest.mark.parametrize("text", [
+        "continue again",
+        "All agents, continue work",
+        "you may resume posting",
+        "OK to continue now everyone",
+        "Erik (human): all agents proceed with work",
+    ])
+    def test_human_resume_phrasings(self, text):
+        assert main.is_human_resume_directive(text)
+
+    def test_peer_stop_does_not_count(self):
+        assert not main.is_human_stop_directive("STOP acknowledged, pausing")
+
+    def test_stop_then_resume_replay(self):
+        msgs = [
+            {"agent_name": "human:Amr", "content": "all agent STOP NOW"},
+            {"agent_name": "human:Igor", "content": "All agents, continue work"},
+        ]
+        assert not main.apply_stop_resume_from_messages(msgs)
+
+    def test_igor_message_not_work_directive(self):
+        igor = (
+            "DO NOT START WORKING UNTIL THE MANAGER SAYS SO. "
+            "create a roaster with every participant."
+        )
+        assert not main.is_work_operator_directive(igor)
+
+    def test_erik_claim_detected(self):
+        msgs = [
+            {"agent_name": "human:Igor", "content": "first one that answers is manager"},
+            {"agent_name": "ErikMoren-agent", "content": "**Claiming the manager/coordination task.**"},
+        ]
+        assert main.resolve_peer_manager(msgs, "marcus-udd-agent") == "ErikMoren-agent"
+
+    def test_magnus_manager_line_wins_over_erik_coordination(self):
+        msgs = [
+            {"agent_name": "human:Igor", "content": "first one that answers is manager"},
+            {"agent_name": "ErikMoren-agent", "content": "**Claiming the coordination task.**"},
+            {"agent_name": "magnus-rosman-agent", "content": "MANAGER: magnus-rosman-agent\n\nI am taking the manager role."},
+            {"agent_name": "magnus-rosman-agent", "content": "DO NOT begin any development work until I say GO."},
+        ]
+        assert main.resolve_peer_manager(msgs, "marcus-udd-agent") == "magnus-rosman-agent"
+        assert main.development_frozen_by_manager(msgs)
+        assert main.roster_phase_active(
+            msgs + [{"agent_name": "magnus-rosman-agent",
+                       "content": "All agents: post your ROSTER entry once."}],
+            "magnus-rosman-agent",
+        )
+
+    def test_erik_coordination_alone_not_manager(self):
+        msgs = [{"agent_name": "ErikMoren-agent", "content": "**Claiming the coordination task.**"}]
+        assert main.resolve_peer_manager(msgs, "marcus-udd-agent") is None
+
+    def test_peer_app_py_delivery_detected(self):
+        msgs = [
+            {"agent_name": "ErikMoren-agent", "content": "CLAIM: create `app.py` with /healthz"},
+            {"agent_name": "igor-petersson-agent", "content": "[DONE] Created `app.py`"},
+        ]
+        assert "app.py" in main.files_delivered_by_peers(msgs, "marcus-udd-agent")
+
+    def test_erik_code_block_counts_as_delivery(self):
+        msgs = [{
+            "agent_name": "ErikMoren-agent",
+            "content": "CLAIM: app.py\n```python\nfrom flask import Flask\n```",
+        }]
+        assert "app.py" in main.files_delivered_by_peers(msgs, "marcus-udd-agent")
+
+    def test_sync_stop_from_history(self):
+        s = AgentState(msg_cap=10, token_counter=TokenCounter(1000))
+        msgs = [
+            {"agent_name": "human:Amr", "content": "all agent STOP NOW"},
+            {"agent_name": "human:Igor", "content": "All agents, continue work"},
+        ]
+        main.sync_session_flags_from_history(msgs, s, "marcus-udd-agent")
+        assert not s.silence_active
+
+    def test_stop_talking_stays_silent_until_human_continue(self):
+        s = AgentState(msg_cap=10, token_counter=TokenCounter(1000))
+        msgs = [{"agent_name": "human:Igor", "content": "All agents, stop talking"}]
+        main.sync_session_flags_from_history(msgs, s, "marcus-udd-agent")
+        assert s.silence_active
+        assert main.is_human_stop_directive("stop talking please")
+
+    def test_sync_stop_sticky_until_resume(self):
+        s = AgentState(msg_cap=10, token_counter=TokenCounter(1000))
+        msgs = [{"agent_name": "human:Amr", "content": "all agent STOP NOW"}]
+        main.sync_session_flags_from_history(msgs, s, "marcus-udd-agent")
+        assert s.silence_active
+
+    def test_duplicate_peer_app_py_blocked(self):
+        reply = "Klar med: `app.py`\n```python\nfrom flask import Flask\n```"
+        assert main.would_duplicate_peer_delivery(reply, {"app.py"})
+
+    def test_blocked_manager_reply(self):
+        assert main._BLOCKED_SELF_MANAGER_RE.search("I will act as the manager")
+        assert main._BLOCKED_SELF_MANAGER_RE.search("session_manager.py")
+
+    def test_josef_step_up_manager_transcript(self):
+        josef_protocol = (
+            "I'll step up as manager for this session.\n\n"
+            "## COMMUNICATION PROTOCOL\n"
+            "All agents: reply once with your name.\n"
+            "Task allocation will happen after roster is complete. "
+            "No agent starts coding until I assign tasks explicitly.\n"
+            "**Next step: All agents post your ROSTER entry once.**"
+        )
+        msgs = [
+            {"agent_name": "human:Igor", "content": (
+                "DO NOT START WORKING UNTIL THE MANAGER SAYS SO. "
+                "The task is to create an Investment Research Firm."
+            )},
+            {"agent_name": "ErikMoren-agent", "content": "**Claiming the coordination task.**"},
+            {"agent_name": "josef-agent", "content": josef_protocol},
+            {"agent_name": "emil-hjaertfors-agent", "content": "ROSTER: emil-hjaertfors-agent | capabilities: x"},
+        ]
+        assert main.resolve_peer_manager(msgs, "marcus-udd-agent") == "josef-agent"
+        assert main.development_frozen_by_manager(msgs)
+        assert main.roster_phase_active(msgs, "josef-agent")
+        assert main.is_unsolicited_roster_post(
+            "ROSTER: marcus-udd-agent | capabilities: code | LLM: gemini",
+            mentioned_me=False,
+            delegated=False,
+        )
+
+    def test_step_up_not_coordination_only(self):
+        assert main._message_claims_manager("I'll step up as manager for this session.")
+        assert not main._message_claims_manager("**Claiming the coordination task.**")
+
+
+class TestTrace:
+    def setup_method(self):
+        import trace as tr
+        tr.clear()
+
+    def test_record_and_format(self):
+        import trace as tr
+        tr.record("PASS", "silence active", "human STOP")
+        items = tr.get_recent(5)
+        assert len(items) == 1
+        assert items[0]["kind"] == "PASS"
+        text = tr.format_entry(items[0])
+        assert "[PASS]" in text
+        assert "silence" in text
+
+
+class TestIgorReactSelfOrganize:
+    IGOR_OP = (
+        "all agents, collaboratively build a React calculator app. "
+        "No predefined roles exist. No leaders, managers, architects, or testers. "
+        "Self-organize, communicate, avoid duplicate work. Act autonomously. "
+        "The first one that answers to this message IS the manager."
+    )
+    IGOR_MGR_CLAIM = (
+        "[CLAIM] I claim the manager/coordinator role for this collaborative "
+        "React calculator app project."
+    )
+
+    def test_work_directive_despite_manager_race(self):
+        assert main.is_work_operator_directive(self.IGOR_OP)
+
+    def test_self_organize_build_kickoff(self):
+        assert main.is_broadcast_work_kickoff(self.IGOR_OP)
+
+    def test_no_defer_when_self_organize_build(self):
+        msgs = [
+            {"agent_name": "human:Igor", "content": self.IGOR_OP},
+            {"agent_name": "igor-petersson-agent", "content": self.IGOR_MGR_CLAIM},
+        ]
+        assert not main.should_defer_to_peer_manager(
+            msgs,
+            self.IGOR_OP,
+            "igor-petersson-agent",
+            "marcus-udd-agent",
+            mentioned_me=False,
+            delegated=False,
+        )
+
+    def test_no_defer_when_roster_roll_call_due(self):
+        roster_ask = (
+            "@all agents: Please post your [ROSTER] line indicating your capabilities."
+        )
+        msgs = [
+            {"agent_name": "human:Igor", "content": self.IGOR_OP},
+            {"agent_name": "igor-petersson-agent", "content": self.IGOR_MGR_CLAIM},
+            {"agent_name": "igor-petersson-agent", "content": roster_ask},
+        ]
+        assert main.roster_roll_call_requested(msgs, "igor-petersson-agent")
+        assert not main.should_defer_to_peer_manager(
+            msgs,
+            self.IGOR_OP,
+            "igor-petersson-agent",
+            "marcus-udd-agent",
+            mentioned_me=False,
+            delegated=False,
+            roster_posted=False,
+        )
+
+    def test_defer_after_roster_posted(self):
+        roster_ask = "@all agents: Please post your [ROSTER] entry once."
+        msgs = [
+            {"agent_name": "human:Igor", "content": self.IGOR_OP},
+            {"agent_name": "igor-petersson-agent", "content": roster_ask},
+            {"agent_name": "marcus-udd-agent", "content": "[ROSTER] marcus-udd-agent | SWE"},
+        ]
+        assert main.should_defer_to_peer_manager(
+            msgs,
+            self.IGOR_OP,
+            "igor-petersson-agent",
+            "marcus-udd-agent",
+            mentioned_me=False,
+            delegated=False,
+            roster_posted=True,
+        )
+
+    def test_manager_coordinator_claim(self):
+        assert main._message_claims_manager(self.IGOR_MGR_CLAIM)
+
+
+class TestIgorManagerClaim:
+    IGOR_CLAIM = (
+        "[CLAIM]\n\nI claim the role of manager for this React calculator app session.\n\n"
+        "[PLAN]\nI propose the following communication protocol."
+    )
+
+    def test_claim_role_of_manager_detected(self):
+        assert main._message_claims_manager(self.IGOR_CLAIM)
+
+    def test_resolve_peer_manager_from_igor_claim(self):
+        msgs = [
+            {"agent_name": "human:Igor", "content": "all agents, build a React calculator"},
+            {"agent_name": "igor-petersson-agent", "content": self.IGOR_CLAIM},
+        ]
+        assert main.resolve_peer_manager(msgs, "marcus-udd-agent") == "igor-petersson-agent"
+
+    def test_designation_from_human_emil(self):
+        msgs = [
+            {"agent_name": "igor-petersson-agent", "content": self.IGOR_CLAIM},
+            {
+                "agent_name": "human:Emil",
+                "content": "all agents, listen to igor-petersson-agent that is the manager",
+            },
+        ]
+        assert main.resolve_peer_manager(msgs, "marcus-udd-agent") == "igor-petersson-agent"
+
+    def test_prompt_includes_peer_manager_section(self):
+        prompt = main.build_active_prompt(
+            "SYS",
+            [],
+            operator_directive=False,
+            op_cmd=None,
+            mentioned_me=False,
+            peer_manager="igor-petersson-agent",
+        )
+        assert "PEER MANAGER ACTIVE: igor-petersson-agent" in prompt
+
+
+class TestBroadcastKickoff:
+    INVESTMENT_IGOR = (
+        "All agents: The task is to create an Investment Research Firm Goal. "
+        "Generate investment theses and portfolio recommendations."
+    )
+
+    def test_kickoff_true_for_investment_broadcast(self):
+        assert main.is_broadcast_work_kickoff(self.INVESTMENT_IGOR)
+
+    def test_kickoff_false_for_roster_broadcast(self):
+        assert not main.is_broadcast_work_kickoff(
+            "All agents post your ROSTER entry once.",
+        )
+
+    def test_kickoff_false_for_manager_race(self):
+        cmd = (
+            "DO NOT START WORKING UNTIL THE MANAGER SAYS SO. "
+            "The task is to create an Investment Research Firm."
+        )
+        assert not main.is_broadcast_work_kickoff(cmd)
+
+    def test_build_active_prompt_includes_kickoff_section(self):
+        prompt = main.build_active_prompt(
+            "SYS",
+            [],
+            operator_directive=True,
+            op_cmd=self.INVESTMENT_IGOR,
+            mentioned_me=False,
+        )
+        assert "BROADCAST COLLABORATION KICKOFF" in prompt
+
+    def test_peer_overlap_does_not_block_kickoff_without_explicit_files(self):
+        op = self.INVESTMENT_IGOR
+        peer_done = {"investment_research_firm_goal.md"}
+        assert not main.peer_overlap_blocks_turn(
+            op, peer_done, mentioned_me=False,
+        )
+
+    def test_peer_overlap_blocks_when_explicit_files_all_delivered(self):
+        op = "All agents: build app.py and README.md together"
+        peer_done = {"app.py", "README.md"}
+        assert main.peer_overlap_blocks_turn(op, peer_done, mentioned_me=False)
+
+    def test_kickoff_claim_fallback_under_200_chars(self):
+        claim = main.build_broadcast_kickoff_claim(
+            self.INVESTMENT_IGOR,
+            [{"agent_name": "emil-hjaertfors-agent", "content": (
+                "Klar med: `investment_research_firm_goal.md`"
+            )}],
+            "/tmp",
+            "marcus-udd-agent",
+        )
+        assert claim.startswith("[CLAIM]")
+        assert len(claim) <= 200
+
+
 class TestColonAddressRouting:
     def test_agent_name_with_hyphen_matches(self):
         assert main._COLON_ADDRESS_RE.match("emil-flyghed-agent: please add subtract")
@@ -1231,3 +1622,283 @@ class TestColonAddressRouting:
 
     def test_all_agents_not_caught(self):
         assert not main._COLON_ADDRESS_RE.match("All agents: please build the app")
+
+
+# ---------------------------------------------------------------------------
+# Pinned "important messages" memory (Part 3 — survives history trimming)
+# ---------------------------------------------------------------------------
+class TestPinnedMemory:
+    def _state(self):
+        return AgentState(msg_cap=10, token_counter=TokenCounter(1000))
+
+    def test_captures_delivery_and_claim(self):
+        s = self._state()
+        with patch.object(main, "AGENT_NAME", "marcus-mac"):
+            main.update_pinned_memory(s, [
+                {"agent_name": "bob", "content": "Klar med: `app.py` — funkar"},
+                {"agent_name": "eve", "content": "Taking: backend API"},
+            ])
+        assert "bob delivered: app.py" in s.pinned_memory
+        assert "eve claimed: backend API" in s.pinned_memory
+
+    def test_dedupes(self):
+        s = self._state()
+        msg = [{"agent_name": "bob", "content": "Done with: parser.py"}]
+        with patch.object(main, "AGENT_NAME", "marcus-mac"):
+            main.update_pinned_memory(s, msg)
+            main.update_pinned_memory(s, msg)
+        assert s.pinned_memory.count("bob delivered: parser.py") == 1
+
+    def test_caps_to_eight_keeping_recent(self):
+        s = self._state()
+        msgs = [{"agent_name": f"a{i}", "content": f"Taking: task{i}"} for i in range(12)]
+        with patch.object(main, "AGENT_NAME", "marcus-mac"):
+            main.update_pinned_memory(s, msgs)
+        assert len(s.pinned_memory) == 8
+        assert "a11 claimed: task11" in s.pinned_memory
+        assert "a0 claimed: task0" not in s.pinned_memory
+
+    def test_direct_mention_pinned(self):
+        s = self._state()
+        with patch.object(main, "AGENT_NAME", "marcus-mac"):
+            main.update_pinned_memory(s, [
+                {"agent_name": "bob", "content": "@marcus-mac can you take the CLI parser?"},
+            ])
+        assert any("→ you" in x for x in s.pinned_memory)
+
+    def test_block_rendered_in_active_prompt(self):
+        p = main.build_active_prompt(
+            "SYS", [], operator_directive=False, op_cmd=None,
+            mentioned_me=False, pinned_memory=["bob delivered: app.py"],
+        )
+        assert "SESSION MEMORY" in p
+        assert "bob delivered: app.py" in p
+
+
+# ---------------------------------------------------------------------------
+# Private steering (console `steer` command → group-chat behaviour)
+# ---------------------------------------------------------------------------
+class TestPrivateSteer:
+    def test_steer_injected(self):
+        p = main.build_active_prompt(
+            "SYS", [], operator_directive=False, op_cmd=None,
+            mentioned_me=False, private_steer="focus on writing tests",
+        )
+        assert "PRIVATE STEERING" in p
+        assert "focus on writing tests" in p
+
+    def test_no_steer_no_section(self):
+        p = main.build_active_prompt(
+            "SYS", [], operator_directive=False, op_cmd=None, mentioned_me=False,
+        )
+        assert "PRIVATE STEERING" not in p
+
+
+# ---------------------------------------------------------------------------
+# Runtime config-reload (live calibration without restart)
+# ---------------------------------------------------------------------------
+class TestReloadRuntime:
+    def test_runtime_json_applied(self, tmp_path):
+        rj = tmp_path / "runtime.json"
+        rj.write_text('{"msg_cap": 3, "token_cap": 12345, '
+                      '"response_delay": 7, "poll_interval": 9}')
+        s = AgentState(msg_cap=10, token_counter=TokenCounter(1000))
+        log = MagicMock()
+        orig_rd, orig_pi = main.RESPONSE_DELAY, main.POLL_INTERVAL
+        try:
+            with patch.object(main, "_RUNTIME_CONFIG_PATH", rj), \
+                 patch.object(main, "_SYSTEM_PROMPT_PATH", tmp_path / "missing.txt"):
+                main.reload_runtime(s, "OLD", 0.0, log)
+            assert s.msg_cap == 3
+            assert s.token_counter.cap == 12345
+            assert main.RESPONSE_DELAY == 7
+            assert main.POLL_INTERVAL == 9
+        finally:
+            main.RESPONSE_DELAY, main.POLL_INTERVAL = orig_rd, orig_pi
+
+    def test_prompt_reloaded_only_on_mtime_change(self, tmp_path):
+        sp = tmp_path / "system_prompt.txt"
+        sp.write_text("X")
+        mtime0 = sp.stat().st_mtime
+        s = AgentState(msg_cap=10, token_counter=TokenCounter(1000))
+        log = MagicMock()
+        with patch.object(main, "_SYSTEM_PROMPT_PATH", sp), \
+             patch.object(main, "_RUNTIME_CONFIG_PATH", tmp_path / "none.json"), \
+             patch.object(main.ag, "load_system_prompt", return_value="RELOADED") as m:
+            prompt, _ = main.reload_runtime(s, "OLD", mtime0, log)
+            assert prompt == "OLD"
+            m.assert_not_called()
+            prompt2, _ = main.reload_runtime(s, "OLD", mtime0 - 100, log)
+            assert prompt2 == "RELOADED"
+            m.assert_called_once()
+
+
+class TestIgorRosterTranscript:
+    GRADER_OP = (
+        "IMPORTANT: NEVER ACKNOWLEDGE ANYTHING THAT IS NOT CLEARLY INTENDED FOR YOU. "
+        "first one that answers IS the manager. DO NOT START WORKING UNTIL THE MANAGER SAYS SO."
+    )
+    IGOR_REACT = (
+        "all agents, collaboratively build a React calculator app with add, subtract, "
+        "multiply, divide. Act autonomously."
+    )
+    IGOR_CLAIM = (
+        "[CLAIM] I claim the manager role for this session to establish a "
+        "communication and collaboration protocol."
+    )
+    IGOR_ROSTER_ASK = (
+        "@all agents: Please post your [ROSTER] line indicating your capabilities"
+    )
+    OLIVER_ROSTER = "[ROSTER] oliver_agent | SWE specialist | tools: read_file"
+
+    def test_peer_mgr_from_history_not_batch_only(self):
+        history = [
+            {"seq": 2, "agent_name": "igor-petersson-agent", "content": self.IGOR_CLAIM},
+        ]
+        batch = [{"seq": 10, "agent_name": "oliver_agent", "content": self.OLIVER_ROSTER}]
+        ctx = history + batch
+        assert main.resolve_peer_manager(ctx, "marcus-udd-agent") == "igor-petersson-agent"
+
+    def test_roster_roll_call_requested_igor_wording(self):
+        ctx = [{"agent_name": "igor-petersson-agent", "content": self.IGOR_ROSTER_ASK}]
+        assert main.roster_roll_call_requested(ctx, "igor-petersson-agent")
+
+    def test_roster_response_due_before_post(self):
+        ctx = [
+            {
+                "agent_name": "human:Igor",
+                "content": self.IGOR_REACT + " DO NOT START WORKING UNTIL THE MANAGER SAYS SO.",
+            },
+            {"agent_name": "igor-petersson-agent", "content": self.IGOR_CLAIM},
+            {"agent_name": "igor-petersson-agent", "content": self.IGOR_ROSTER_ASK},
+        ]
+        assert main.development_frozen_by_manager(ctx)
+        assert main.roster_response_due(
+            ctx, "igor-petersson-agent", "marcus-udd-agent", roster_posted=False,
+        )
+
+    def test_no_roster_due_after_self_post_in_history(self):
+        ctx = [
+            {"agent_name": "igor-petersson-agent", "content": self.IGOR_ROSTER_ASK},
+            {"agent_name": "marcus-udd-agent", "content": main.build_canned_roster_line("marcus-udd-agent")},
+        ]
+        assert not main.roster_response_due(
+            ctx, "igor-petersson-agent", "marcus-udd-agent", roster_posted=False,
+        )
+
+    def test_best_work_operator_prefers_react_over_grader(self):
+        ctx = [
+            {"agent_name": "human:Grader", "content": self.GRADER_OP},
+            {"agent_name": "human:Igor", "content": self.IGOR_REACT},
+        ]
+        best = main.best_work_operator_command(ctx) or ""
+        assert main._WORK_OPERATOR_BODY_RE.search(best)
+
+    def test_resolve_op_cmd_work_over_grader_sticky(self):
+        op_cmd, is_work = main.resolve_op_cmd(self.GRADER_OP, None, work_cmd=self.IGOR_REACT)
+        assert is_work
+        assert "React calculator" in (op_cmd or "")
+
+    def test_canned_roster_line(self):
+        line = main.build_canned_roster_line("marcus-udd-agent")
+        assert line.startswith("[ROSTER] marcus-udd-agent")
+        assert "tools:" in line
+
+    def test_unsolicited_roster_blocked_solicited_allowed(self):
+        assert main.is_unsolicited_roster_post(
+            "[ROSTER] marcus-udd-agent | SWE",
+            mentioned_me=False,
+            delegated=False,
+            solicited=False,
+        )
+        assert not main.is_unsolicited_roster_post(
+            "[ROSTER] marcus-udd-agent | SWE",
+            mentioned_me=False,
+            delegated=False,
+            solicited=True,
+        )
+
+    IGOR_PLAN2 = (
+        "Next step: Request roster/capabilities lines from all agents to proceed "
+        "with task allocation."
+    )
+    IGOR_WAITING = (
+        "[ROSTER] igor-petersson-agent | SWE agent | backend: gpt-4.1-mini\n\n"
+        "Oliver_agent: roster received. Waiting for more roster lines before "
+        "starting task allocation."
+    )
+    IGOR_CLOSE = (
+        "[MANAGER] Roster collection concluded. Current agents available:\n"
+        "- igor-petersson-agent (Manager)\n"
+        "- oliver_agent (Frontend React, JS/TS, testing)\n\n"
+        "Task breakdown for the React calculator app:\n"
+        "1. UI implementation (responsive buttons, display, layout)\n"
+        "2. Calculator operations logic (add, subtract, multiply, divide, decimals)\n"
+        "3. Error handling for invalid inputs and divide-by-zero\n"
+        "4. Clear/reset functionality\n"
+        "5. Testing for edge cases and component integration\n\n"
+        "Assignment:\n"
+        "- oliver_agent: Implement UI components of the calculator with responsive design.\n\n"
+        "Others may claim remaining tasks once open.\n\n"
+        "Reminder: Only respond or claim tasks explicitly assigned or initiated by the manager."
+    )
+
+    def test_igor_plan2_triggers_roll_call(self):
+        ctx = [
+            {"agent_name": "igor-petersson-agent", "content": self.IGOR_CLAIM},
+            {"agent_name": "igor-petersson-agent", "content": self.IGOR_PLAN2},
+        ]
+        assert main.roster_roll_call_requested(ctx, "igor-petersson-agent")
+
+    def test_igor_waiting_more_roster_due(self):
+        ctx = [
+            {"agent_name": "igor-petersson-agent", "content": self.IGOR_PLAN2},
+            {"agent_name": "igor-petersson-agent", "content": self.IGOR_WAITING},
+        ]
+        assert main.roster_response_due(
+            ctx, "igor-petersson-agent", "marcus-udd-agent", roster_posted=False,
+        )
+
+    def test_roster_closed_stops_roster_due(self):
+        ctx = [
+            {"agent_name": "igor-petersson-agent", "content": self.IGOR_PLAN2},
+            {"agent_name": "igor-petersson-agent", "content": self.IGOR_CLOSE},
+        ]
+        assert main.roster_collection_closed(ctx)
+        assert not main.roster_response_due(
+            ctx, "igor-petersson-agent", "marcus-udd-agent", roster_posted=False,
+        )
+
+    def test_open_claim_due_after_close(self):
+        ctx = [
+            {"agent_name": "igor-petersson-agent", "content": self.IGOR_CLOSE},
+        ]
+        assert main.manager_open_claim_due(
+            ctx, "igor-petersson-agent", "marcus-udd-agent", claim_posted=False,
+        )
+        assert not main.should_defer_to_peer_manager(
+            ctx,
+            self.IGOR_REACT,
+            "igor-petersson-agent",
+            "marcus-udd-agent",
+            mentioned_me=False,
+            delegated=False,
+            roster_posted=True,
+            claim_posted=False,
+        )
+
+    def test_roster_phase_inactive_after_close(self):
+        ctx = [
+            {"agent_name": "igor-petersson-agent", "content": self.IGOR_WAITING},
+            {"agent_name": "igor-petersson-agent", "content": self.IGOR_CLOSE},
+        ]
+        assert not main.roster_phase_active(ctx, "igor-petersson-agent")
+
+    def test_claim_line_picks_operations_not_ui(self):
+        line = main.build_open_task_claim_line(
+            [{"agent_name": "igor-petersson-agent", "content": self.IGOR_CLOSE}],
+            "igor-petersson-agent",
+            "marcus-udd-agent",
+        )
+        assert "operations logic" in line.lower()
+        assert "ui implementation" not in line.lower()

@@ -121,7 +121,7 @@ def main() -> None:
         print(f"API OK — open {args.base} to watch the same run in the GUI.\n")
 
         if args.interactive or not args.task:
-            print("Commands: cap <usd> · reset · compact · local on|off · cloud on|off · exit")
+            print("Commands: cap <usd> · clear · compact · local on|off · cloud on|off · exit")
             cap = args.cap
             while True:
                 task = _read_task(f"\n🌉 [cap ${cap or 'default'}] Task: ")
@@ -132,9 +132,9 @@ def main() -> None:
                 low = task.lower()
                 if low in ("exit", "quit", "q"):
                     break
-                if low == "reset":
+                if low in ("clear", "reset"):
                     client.post("/api/reset").raise_for_status()
-                    print("Workspace reset.")
+                    print("Workspace cleared.")
                     continue
                 if low.startswith("cap "):
                     try:

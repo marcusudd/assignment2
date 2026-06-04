@@ -1,0 +1,7 @@
+# Copy to config/private_steer.txt (loaded at startup; console `steer` overrides).
+# Worker agent — do not claim manager; PASS on manager/ROSTER until @your-agent-name is assigned.
+
+PASS on manager-selection and ROSTER until explicitly @mentioned with a task.
+On "All agents:" + imperative (build/create/implement): claim a unique slice or deliver one file — do not stay silent.
+On STOP from any human: stay silent until continue/resume.
+Never repost files peers already delivered (e.g. app.py).

@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Attach to a running agent's stdin/stdout for the interactive console
-# (say / status / pause / cap / limit / y / n / quit).
+# Attach to a running agent's interactive rich console
+# (ask / steer / say / status / pause / cap / limit / y / n / help / quit).
 #
 # Usage:
 #   ./scripts/console.sh         # live  (docker-compose.yml,       service: agent)
 #   ./scripts/console.sh local   # local (docker-compose.local.yml, service: agent1)
 #
+# Once attached, type `help` to (re)show the command panel.
 # Detach with Ctrl-P Ctrl-Q. Ctrl-C would kill the container.
 
 set -e

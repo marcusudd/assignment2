@@ -12,6 +12,8 @@ from pathlib import Path
 
 from openai import OpenAI, APIError
 
+import trace as tr
+
 
 class BashApproval:
     """Routes bash y/n through the console thread to avoid stdin race conditions."""
@@ -344,6 +346,7 @@ def decide(
 
     # Self-echo guard: defence-in-depth in case caller passes unfiltered messages
     if len(new_messages) >= 3 and all(m["agent_name"] == own_name for m in new_messages[-3:]):
+        tr.record("PASS", "self-echo guard (last 3 msgs are own)")
         return "PASS"
 
     # Build conversation context from recent hub messages
@@ -407,9 +410,10 @@ def decide(
             result = result + HUB_MSG_BREAK + format_code_transfer(fname, content, lang)
         return result
 
-    for _ in range(rounds_cap):
+    for round_i in range(rounds_cap):
         response = _call_llm(history, system_prompt)
         if response is None or not response.choices:
+            tr.record("LLM", "API error or empty response")
             _rollback(history)
             return _finish("PASS")
 
@@ -441,6 +445,12 @@ def decide(
 
         if finish_reason == "stop":
             reply = (msg.content or "").strip()
+            preview = reply[:600] if reply else "(empty)"
+            tr.record(
+                "LLM",
+                f"round {round_i + 1} stop → {'PASS' if not reply or reply.upper() == 'PASS' else 'text'}",
+                preview,
+            )
             if not reply:
                 # Empty reply: if tools were used, generate fallback instead of going silent
                 if tools_used and this_turn_tools:
@@ -468,6 +478,10 @@ def decide(
 
         if finish_reason == "tool_calls":
             tools_used = True
+            names = [tc.function.name for tc in msg.tool_calls]
+            tr.record("TOOL", f"round {round_i + 1} calls", ", ".join(names))
+            if msg.content and msg.content.strip():
+                tr.record("LLM", f"round {round_i + 1} with tools (text)", msg.content.strip()[:400])
             for tc in msg.tool_calls:
                 try:
                     inputs = json.loads(tc.function.arguments or "{}")
@@ -480,8 +494,15 @@ def decide(
                     })
                     continue
                 result = dispatch_tool(tc.function.name, inputs)
+                tr.record(
+                    "TOOL",
+                    tc.function.name,
+                    (inputs.get("command") or inputs.get("path") or str(inputs))[:200]
+                    + " → "
+                    + result[:300],
+                )
                 if DEBUG:
-                    print(f"  [tool] {tc.function.name} → {result[:80]}")
+                    print(f"  [tool] {tc.function.name} → {result[:80]}", file=sys.stderr)
                 # Track for auto-fallback
                 tname = tc.function.name
                 if tname == "bash":
@@ -506,6 +527,7 @@ def decide(
                 })
             continue
 
+        tr.record("LLM", f"round {round_i + 1} unexpected finish", finish_reason or "?")
         _rollback(history)
         return _finish("PASS")
 
@@ -515,6 +537,7 @@ def decide(
         return _finish(
             _build_autosummary(this_turn_tools, this_turn_files, suffix=" (max rounds reached)"),
         )
+    tr.record("PASS", f"max rounds ({rounds_cap}) without final reply")
     _rollback(history)
     return _finish("PASS")
 
@@ -649,8 +672,7 @@ def _build_autosummary(
 
 
 
-def load_system_prompt() -> str:
-    text = Path("config/system_prompt.txt").read_text(encoding="utf-8")
+def _render_prompt(text: str) -> str:
     return (
         text
         .replace("{workspace_dir}", str(Path(WORKSPACE_DIR).resolve()))
@@ -658,6 +680,23 @@ def load_system_prompt() -> str:
         .replace("{agent_name}", AGENT_NAME)
         .replace("{agent_persona}", os.getenv("AGENT_PERSONA", ""))
     )
+
+
+def load_system_prompt() -> str:
+    return _render_prompt(Path("config/system_prompt.txt").read_text(encoding="utf-8"))
+
+
+def load_private_prompt() -> str:
+    """System prompt for the human's private local Q&A channel (console `ask`)."""
+    return _render_prompt(Path("config/private_prompt.txt").read_text(encoding="utf-8"))
+
+
+def load_private_steer() -> str:
+    """Optional default steering for group chat (console `steer` overrides)."""
+    path = Path("config/private_steer.txt")
+    if not path.exists():
+        return ""
+    return path.read_text(encoding="utf-8").strip()
 
 
 # ---------------------------------------------------------------------------

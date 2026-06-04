@@ -28,7 +28,7 @@ COPY fixtures/ fixtures/
 COPY --from=frontend-build /build/frontend/dist ./frontend/dist
 
 RUN mkdir -p workspace logs sessions \
-    && chmod +x scripts/reset_seed.sh
+    && chmod +x scripts/reset_seed.sh scripts/clear_workspace.sh scripts/docker-entrypoint.sh
 
 ENV PYTHONUNBUFFERED=1
 
@@ -36,5 +36,8 @@ EXPOSE 8000
 
 HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \
   CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health')"]
+
+# Clear the workspace on every boot, then run CMD.
+ENTRYPOINT ["bash", "scripts/docker-entrypoint.sh"]
 
 CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8000"]

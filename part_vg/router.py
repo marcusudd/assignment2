@@ -277,7 +277,8 @@ class Router:
     ) -> Plan:
         data = self._parse_json(raw)
         if data is None:
-            print("[router] JSON parse error — falling back to mode 2", file=sys.stderr)
+            print(f"[router] JSON parse error — raw: {raw[:200]!r}", file=sys.stderr)
+            print("[router] falling back to mode 2", file=sys.stderr)
             return self._fallback_mode2(
                 task, allow_local=allow_local, allow_cloud=allow_cloud
             )
@@ -349,7 +350,7 @@ class Router:
         used: dict[str, int] = {}
         return Plan(
             mode=2,
-            reasoning="Fallback: single local worker (cloud disabled)",
+            reasoning="Fallback: single local worker (JSON parse failed)",
             workers=[
                 WorkerPlan(
                     worker_id=assign_worker_id("local", [], used),

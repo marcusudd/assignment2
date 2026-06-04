@@ -186,7 +186,7 @@ export function BifrostProvider({ children }) {
     setStatus("");
     try {
       await resetWorkspace();
-      setStatus("Workspace reset to seed app");
+      setStatus("Workspace cleared");
       setTask("");
       setCurrentTask("");
     } catch (e) {

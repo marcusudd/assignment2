@@ -37,7 +37,7 @@ def _load_system_prompt(config) -> str:
 
 
 def _reset_workspace() -> None:
-    script = Path(__file__).parent / "scripts" / "reset_seed.sh"
+    script = Path(__file__).parent / "scripts" / "clear_workspace.sh"
     subprocess.run(["bash", str(script)], check=False)
 
 
@@ -233,7 +233,7 @@ def main() -> None:
         # ----------------------------------------------------------------
         print("\n" + "─" * 60)
         print("  Bifrost — interactive mode")
-        print("  Commands: cap <usd> · reset · compact · local on|off · cloud on|off · exit")
+        print("  Commands: cap <usd> · clear · compact · local on|off · cloud on|off · exit")
         print("  compact → POST /api/compact when server is up; else use scripts/run_via_api.py")
         print("  Multi-line / pasted prompts are accepted.")
         print(f"  Cap ${config.cost_cap_usd:.2f} is applied PER task (not session).")
@@ -249,9 +249,9 @@ def main() -> None:
             if task.lower() in ("exit", "quit", "q"):
                 print("Bye!")
                 break
-            if task.lower() == "reset":
+            if task.lower() in ("clear", "reset"):
                 _reset_workspace()
-                print("Workspace reset to seed app.")
+                print("Workspace cleared.")
                 continue
             if task.lower() == "compact":
                 msg = _api_compact(args.api_base)

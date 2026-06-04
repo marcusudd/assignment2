@@ -1,17 +1,18 @@
 # ════════════════════════════════════════════════════════════════════
 # LIVE DEMO — one agent connected to the RunPod hub
 #
-#   # terminal 1 — logs
+#   # terminal 1 — start the agent (detached) + watch the logs
 #   cd part_3
-#   docker compose up --build
+#   docker compose up --build -d
+#   tail -f logs/*.log              # live logs (QUIET_STDOUT keeps them off the console)
 #
-#   # terminal 2 — interactive console (say / status / pause / ...)
+#   # terminal 2 — the interactive console (ask / steer / say / status / ...)
 #   cd part_3
 #   ./scripts/console.sh
 #
 # Settings come from .env (HUB_URL, AGENT_NAME, OPENROUTER_API_KEY, etc).
 # Detach the console with Ctrl-P Ctrl-Q.
-# Stop with Ctrl-C in terminal 1, then `docker compose down` to clean up.
+# Stop with `docker compose down` to clean up.
 # ════════════════════════════════════════════════════════════════════
 
 services:
@@ -21,6 +22,7 @@ services:
     environment:
       AUTO_APPROVE: "true"
       MAX_ROUNDS: "10"
+      QUIET_STDOUT: "1"
     env_file:
       - .env
     volumes:

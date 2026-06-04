@@ -16,6 +16,9 @@ echo
 echo "2. Frontend production build..."
 (cd frontend && npm run build)
 test -f frontend/dist/index.html
+test -f frontend/dist/favicon.svg
+test -f frontend/dist/favicon.ico
+test -f frontend/dist/apple-touch-icon.png
 echo
 
 echo "3. Server import smoke..."

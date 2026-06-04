@@ -7,6 +7,7 @@ Checklist before examination. Run from `part_vg/`.
 ```bash
 cp .env.example .env          # if needed — add OPENROUTER_API_KEY
 bash scripts/verify_release.sh
+PYTHONPATH=. python scripts/run_via_api.py --preflight   # after server is up
 ```
 
 LM Studio:
@@ -24,14 +25,22 @@ bash scripts/docker-up.sh
 # or: docker compose up --build
 ```
 
-Open **http://localhost:8000** (web GUI).  
-Fallback TUI: `docker compose --profile cli run --rm bifrost-cli -i`
+Open **http://localhost:8000** (web GUI).
+
+**Same run in terminal + GUI** (recommended for live demo):
+
+```bash
+PYTHONPATH=. python scripts/run_via_api.py -i
+# or one-shot: python scripts/run_via_api.py --cap 0.35 "…"
+```
+
+Offline Rich TUI (not in GUI SSE): `docker compose --profile cli run --rm bifrost-cli -i`
 
 ## 3. What to show (VG criteria map)
 
 | Show | How |
 |------|-----|
-| **VG.1** Parallel sub-agents | Hero task → Mode 3 → timeline: **two ☁️ lanes overlap** + optional 🏠 lanes |
+| **VG.1** Parallel sub-agents | Hero task → **Mode 3** badge + **Parallel lanes** (center) — overlapping bars + worker grid |
 | **VG.2** Compaction | Long integrator run OR lower `token_threshold` in config.toml first |
 | **VG.3** Cost cap | Cost panel + warning at 75% + hard stop if cap hit |
 | **Savings story** | Heimdall panel → "Saved vs all-Haiku, no Bifrost" — same model, local offload only. Switch selector to Opus to see the premium comparison. Against budget models (gemini-flash) Bifrost is not cheaper — that's shown honestly. |
@@ -58,7 +67,9 @@ Register the router in main.py and make sure pytest passes.
 
 After run: `bash scripts/verify_orders.sh` (objective pass/fail). Check log `worker_cost` — locals should be $0; cloud spend on router/test/integration.
 
-**Point at:** Router banner Mode 3 → parallel timeline (most lanes midgard/local) → BLOCKED / compaction lines in the activity feed → Heimdall savings card (local-execution split) → result panel.
+**Point at:** Mode 3 badge + Parallel lanes → Evidence panel (routing/workers/tools) → activity feed → Heimdall savings → **Built in workspace** + run summary after done.
+
+**Objective check:** `bash scripts/verify_orders.sh` (pytest on workspace).
 
 **Savings beat:** the default comparison is Haiku (same cloud model Bifrost actually uses). Local workers ran for $0 — those tokens would have cost ~$X on Haiku alone. That's the honest number: local offload, same model, no cherry-picking.
 
@@ -95,3 +106,21 @@ Shows overlapping lanes + activity feed without backend — useful for layout re
 - Logs in `logs/`
 - Workspace: `bash scripts/reset_seed.sh` or Reset in UI
 - Independent pytest in `workspace/` (avoid completion bias)
+
+## 8. Eval ladder prompts (automated GUI run)
+
+```bash
+PYTHONPATH=. python scripts/run_eval_gui.py
+```
+
+Prompts live in `logs/eval_ladder_GUI/test_1.txt` … `test_5.txt` (same text as `presentation_vg.md`).
+
+## Bonus: calculator GUI (Mac only)
+
+Tkinter is not available in Homebrew Python 3.14 `.venv`. Use system Python:
+
+```bash
+/usr/bin/python3 workspace/calculator_gui.py
+```
+
+Requires `calculator.py` in workspace (build via agent first; do not reset before GUI run).

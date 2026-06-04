@@ -5,6 +5,7 @@ cost transparency with a hard budget cap, live activity feed, and `docker compos
 for graders (VG.7).
 
 - **Web GUI** — React + Vite + Tailwind at http://localhost:8000  
+- **Terminal (API)** — `python scripts/run_via_api.py` — same run as GUI via `/api/run` + SSE  
 - **Terminal TUI** — Rich dashboard fallback (`python main.py` or Docker CLI profile)  
 - **Motor** — own orchestrator loop (no LangChain); structured tool calls via OpenAI-compatible API  
 - **Routing principle** — cloud model only plans, writes tests, and integrates; local models do the bulk codegen. "Cost saved vs all-cloud" is the honest savings metric.
@@ -76,11 +77,22 @@ cd frontend && npm run dev
 cd frontend && npm run dev:mock
 ```
 
-### Terminal-only (original TUI)
+### Terminal via API (visible in GUI — recommended for demo)
+
+```bash
+# Server must be running on :8000
+PYTHONPATH=. python scripts/run_via_api.py --preflight
+PYTHONPATH=. python scripts/run_via_api.py "List all Python files in the workspace"
+PYTHONPATH=. python scripts/run_via_api.py --cap 0.35 --reset "Add /orders …"
+PYTHONPATH=. python scripts/run_via_api.py -i   # REPL: cap · reset · compact · local/cloud toggles
+```
+
+### Terminal-only (direct Rich TUI — not shown in GUI SSE)
 
 ```bash
 PYTHONPATH=. python main.py "List all Python files in the workspace"
-PYTHONPATH=. python main.py -i   # interactive REPL
+PYTHONPATH=. python main.py --no-cloud "…"    # Asgard off
+PYTHONPATH=. python main.py -i   # interactive REPL (+ compact if server is up)
 ```
 
 ---
@@ -173,9 +185,22 @@ Web UI reads the same `StateRegistry` snapshot as the Rich TUI — orchestration
 |----------|--------|-------------|
 | `/api/health` | GET | Health check |
 | `/api/config` | GET | Models, cap, comparison list |
-| `/api/run` | POST | `{ "task": "...", "cap": 0.2 }` |
+| `/api/preflight` | GET | Demo readiness checks |
+| `/api/run` | POST | `{ "task": "...", "cap": 0.2, "allow_local": true, "allow_cloud": true }` |
+| `/api/compact` | POST | Manual context compaction (active run) |
 | `/api/reset` | POST | Reset workspace to seed app |
 | `/api/events` | GET | SSE live state stream |
+| `/api/logs` | GET | List session log files |
+
+### Grader quickstart — which path to use?
+
+| Goal | Command |
+|------|---------|
+| Live demo (GUI + terminal same run) | `docker compose up` → GUI **Kör** or `scripts/run_via_api.py` |
+| GUI layout only (no keys) | `BIFROST_MOCK=true docker compose up` |
+| Terminal eval ladder in GUI | `scripts/run_eval_gui.py` (POST `/api/run`) |
+| Terminal eval ladder offline | `scripts/run_eval_ladder.sh` (`main.py`, no SSE) |
+| Offline Rich TUI | `python main.py` or `docker compose --profile cli` |
 
 ---
 
@@ -202,7 +227,7 @@ part_vg/
 
 | ID | Where it shows |
 |----|----------------|
-| VG.1 | Timeline overlap (mode 3, ≥2 workers) |
+| VG.1 | Center panel: **Mode 3** badge + **Parallel lanes** gantt + open worker grid |
 | VG.2 | Activity feed compaction event |
 | VG.3 | Cost badge + warning tint + "budget hit — stopped" banner |
 | VG.4 | BLOCKED bash in feed |

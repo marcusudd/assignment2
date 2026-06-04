@@ -67,11 +67,23 @@ def write_session_summary(
     registry,
     routing: str,
     error: str | None = None,
+    built: tuple[list[str], list[str]] | None = None,
 ) -> None:
     fh.write("\n\n=== RESULT ===\n")
     if error:
         fh.write(f"ERROR: {error}\n")
     fh.write((result or "(no result)") + "\n")
+
+    if built is not None:
+        created, modified = built
+        fh.write("\n=== BUILT ===\n")
+        if not created and not modified:
+            fh.write("(no file changes)\n")
+        for f in created:
+            fh.write(f"+ {f}\n")
+        for f in modified:
+            fh.write(f"~ {f}\n")
+
     fh.write("\n=== COST ===\n")
     fh.write(f"total: ${snap['total_usd']:.6f} / cap ${snap['cap_usd']:.2f}\n")
     fh.write(f"routing: {routing}\n")

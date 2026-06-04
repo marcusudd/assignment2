@@ -12,6 +12,8 @@ sessions/*
 !sessions/.gitkeep
 logs/*
 !logs/.gitkeep
+!logs/eval_ladder_GUI/
+!logs/eval_ladder_GUI/**
 demo.txt
 frontend/node_modules/
 frontend/dist/

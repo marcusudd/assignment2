@@ -44,8 +44,10 @@ _BOILERPLATE_DIRS = {"models", "schemas", "migrations", "db", "config"}
 _BOILERPLATE_FILES = {"__init__.py", "constants.py", "enums.py", "types.py"}
 
 
-def _classify_backend(f: str) -> str:
+def _classify_backend(f: str, *, allow_cloud: bool = True) -> str:
     """Tests run on cloud (correctness critical). Everything else is local."""
+    if not allow_cloud:
+        return "local"
     return "cloud" if _TEST_RE.search(f) else "local"
 
 
@@ -99,7 +101,7 @@ class Router:
         self._cloud_base_url = cloud_base_url
         self._cloud_api_key = cloud_api_key
 
-    def plan(self, task: str) -> Plan:
+    def plan(self, task: str, *, allow_cloud: bool = True) -> Plan:
         if self._is_simple(task):
             used: dict[str, int] = {}
             return Plan(
@@ -119,29 +121,34 @@ class Router:
 
         # Fast path: if task explicitly names 2+ disjoint .py files, decompose
         # without an LLM call — deterministic and never truncates.
-        fast = self._fast_decompose(task)
+        fast = self._fast_decompose(task, allow_cloud=allow_cloud)
         if fast:
             return fast
+
+        if not allow_cloud:
+            return self._fallback_mode2_local(task)
 
         return self._cloud_decompose(task)
 
     # ------------------------------------------------------------------
-    def _fast_decompose(self, task: str) -> Plan | None:
+    def _fast_decompose(self, task: str, *, allow_cloud: bool = True) -> Plan | None:
         """If task names 2+ .py files (or 1 + pytest/register), decompose without LLM."""
         skip = {"main.py", "app.py", "__init__.py", "conftest.py"}
         all_py = re.findall(r'(?:[\w/-]+/)?[\w-]+\.py', task)
         named = [f for f in dict.fromkeys(all_py) if Path(f).name not in skip]
 
-        if len(named) < 2:
-            single = self._fast_decompose_single_named(task, named, skip)
+        if len(named) < 3:
+            single = self._fast_decompose_single_named(
+                task, named, skip, allow_cloud=allow_cloud
+            )
             if single:
                 return single
             return None
 
-        return self._plan_from_files(task, named)
+        return self._plan_from_files(task, named, allow_cloud=allow_cloud)
 
     def _fast_decompose_single_named(
-        self, task: str, named: list[str], skip: set[str]
+        self, task: str, named: list[str], skip: set[str], *, allow_cloud: bool = True
     ) -> Plan | None:
         """One implementation file + pytest/register/main → add inferred test worker."""
         if len(named) != 1 or not self._implies_multi_file_work(task):
@@ -160,7 +167,7 @@ class Router:
         files = named + [p for p in extra if p not in named]
         if len(files) < 2:
             return None
-        return self._plan_from_files(task, files)
+        return self._plan_from_files(task, files, allow_cloud=allow_cloud)
 
     def _implies_multi_file_work(self, task: str) -> bool:
         if _MULTI_FILE_SIGNALS.search(task):
@@ -174,11 +181,15 @@ class Router:
         stem = Path(source_py).stem
         return f"tests/test_{stem}.py"
 
-    def _plan_from_files(self, task: str, files: list[str]) -> Plan:
+    def _plan_from_files(
+        self, task: str, files: list[str], *, allow_cloud: bool = True
+    ) -> Plan:
         used: dict[str, int] = {}
         workers = [
             WorkerPlan(
-                worker_id=assign_worker_id(_classify_backend(f), [f], used),
+                worker_id=assign_worker_id(
+                    _classify_backend(f, allow_cloud=allow_cloud), [f], used
+                ),
                 role="coder",
                 task=(
                     f"{task}\n\n"
@@ -188,7 +199,7 @@ class Router:
                     f"business logic, validation, and edge cases."
                 ),
                 owned_files=[f],
-                backend_name=_classify_backend(f),
+                backend_name=_classify_backend(f, allow_cloud=allow_cloud),
                 local_tier=_classify_tier(f),
             )
             for f in files
@@ -302,6 +313,23 @@ class Router:
                     task=task,
                     owned_files=[],
                     backend_name="cloud",
+                    local_tier="standard",
+                )
+            ],
+        )
+
+    def _fallback_mode2_local(self, task: str) -> Plan:
+        used: dict[str, int] = {}
+        return Plan(
+            mode=2,
+            reasoning="Fallback: single local worker (cloud disabled)",
+            workers=[
+                WorkerPlan(
+                    worker_id=assign_worker_id("local", [], used),
+                    role="coder",
+                    task=task,
+                    owned_files=[],
+                    backend_name="local",
                     local_tier="standard",
                 )
             ],

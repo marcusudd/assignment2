@@ -30,8 +30,10 @@ Your shell is ALREADY in the workspace: {workspace_dir}
 
 Examples:
   WRONG: cd {workspace_dir} && python3 -c "from wordle import ..."
+  WRONG: read_file workspace/models/order.py   (never include workspace/ prefix)
   WRONG: rm file; cat /etc/passwd
   WRONG: sleep 999 &
+  RIGHT: read_file models/order.py
   RIGHT: python3 -c "from wordle import WordleGame; print('ok')"
   RIGHT: python3 -m pytest tests/ -x -q
   RIGHT: find . -name '*.py' | head -20
@@ -45,6 +47,14 @@ Do not claim "tests pass" without showing the test runner output.
 Use `{python_cmd}` for scripts and tests. Do NOT use bare `pip` or search for venvs.
 Dependencies (fastapi, sqlalchemy, pytest, httpx) are pre-installed.
 
+## Testing
+If you add a module at the workspace root (e.g. calculator.py) that tests import,
+ensure conftest.py exists at the workspace root with:
+  import sys
+  from pathlib import Path
+  sys.path.insert(0, str(Path(__file__).parent))
+so `from calculator import ...` works regardless of cwd. Create it with write_file if missing.
+
 ## File ownership
 You have been assigned specific files to work on. Write ONLY to your assigned files.
 Do not modify shared framework files (main.py, __init__.py, app.py) — the orchestrator handles those.
@@ -54,3 +64,6 @@ When your task is complete, reply with a concise summary:
 - What files you created or modified
 - Whether you ran and verified the code
 - Any open issues or assumptions
+
+IMPORTANT: As soon as pytest shows all tests passing, output your summary
+immediately. Do NOT call any more tools after a passing test run.

@@ -1,4 +1,11 @@
-import { useRef, useEffect, useCallback, useMemo, useState } from "react";
+import {
+  forwardRef,
+  useRef,
+  useEffect,
+  useCallback,
+  useMemo,
+  useState,
+} from "react";
 import {
   AlertTriangle,
   ArrowDown,
@@ -17,11 +24,170 @@ import {
 import { useBifrost } from "../BifrostContext.jsx";
 import LogEntry from "./LogEntry.jsx";
 import RoutingBridge from "./RoutingBridge.jsx";
+import { useEventToasts } from "../hooks/useEventToasts.js";
+import RunSummary from "./RunSummary.jsx";
 import { sortEventsByTs } from "../utils/logFormat.js";
-import { workerDisplayLabel } from "../utils/workerLabel.js";
+import { workerDisplayLabel, workerShortId } from "../utils/workerLabel.js";
 
 const SCROLL_THRESHOLD = 80;
 const TEXTAREA_MAX_ROWS = 6;
+
+const PHASE_STEPS = [
+  { id: "routing", label: "Route" },
+  { id: "fanout", label: "Fan-out" },
+  { id: "integration", label: "Integrate" },
+  { id: "done", label: "Done" },
+];
+
+function phaseStepState(stepId, phase, running) {
+  const order = PHASE_STEPS.map((s) => s.id);
+  let effective = phase === "idle" && running ? "routing" : phase;
+  if (order.indexOf(effective) < 0 && running) effective = "fanout";
+  const cur = order.indexOf(effective);
+  const idx = order.indexOf(stepId);
+  if (effective === "done") return "done";
+  if (cur < 0) return "pending";
+  if (idx < cur) return "done";
+  if (idx === cur) return "active";
+  return "pending";
+}
+
+function ModeBadge({ routing, metrics, running, phase }) {
+  const mode = routing?.mode;
+  if (mode == null && !running) return null;
+  const wm = metrics?.workers;
+  const total = wm?.total ?? 0;
+  const local = wm?.local ?? 0;
+  const cloud = wm?.cloud ?? 0;
+  const isMode3 = mode === 3;
+  const showWorkers = total > 0 || (running && phase === "fanout");
+
+  return (
+    <span
+      className={`mode-badge shrink-0 ${isMode3 ? "mode-badge-parallel" : ""}`}
+      title={routing?.summary}
+    >
+      {mode != null ? `Mode ${mode}` : "Routing…"}
+      {isMode3 && " · parallel"}
+      {showWorkers && ` · ${total} workers · ${local}L / ${cloud}C`}
+    </span>
+  );
+}
+
+function PhaseSteps({ phase, running, routing, metrics }) {
+  if (!running && phase !== "done") return null;
+
+  return (
+    <nav
+      className="phase-steps mb-2 flex shrink-0 flex-wrap items-center gap-2"
+      aria-label="Run phase"
+    >
+      <ModeBadge routing={routing} metrics={metrics} running={running} phase={phase} />
+      <span className="flex items-center gap-1">
+      {PHASE_STEPS.map((step, i) => {
+        const state = phaseStepState(step.id, phase, running);
+        return (
+          <span key={step.id} className="flex items-center gap-1">
+            {i > 0 && (
+              <span
+                className={`phase-step-sep ${
+                  state === "done" || state === "active" ? "phase-step-sep-done" : ""
+                }`}
+              />
+            )}
+            <span
+              className={`phase-step flex items-center gap-0.5 ${
+                state === "active"
+                  ? "phase-step-active"
+                  : state === "done"
+                    ? "phase-step-done"
+                    : ""
+              }`}
+            >
+              {state === "done" && (
+                <CheckCircle2 className="h-2.5 w-2.5 shrink-0" strokeWidth={2.5} />
+              )}
+              {step.label}
+            </span>
+          </span>
+        );
+      })}
+      </span>
+    </nav>
+  );
+}
+
+function MiniGantt({ workers }) {
+  const withSpan = (workers ?? []).filter(
+    (w) => w.start != null && w.end != null,
+  );
+  if (withSpan.length === 0) return null;
+
+  const maxEnd = Math.max(...withSpan.map((w) => w.end), 0.1);
+
+  return (
+    <div className="mini-gantt mini-gantt-prominent">
+      <p className="mini-gantt-title mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-bifrost/75">
+        Parallel lanes
+      </p>
+      {withSpan.map((w) => {
+        const left = (w.start / maxEnd) * 100;
+        const widthPct = Math.max(((w.end - w.start) / maxEnd) * 100, 2);
+        const isRunning = w.status === "running";
+        return (
+          <div
+            key={w.id}
+            className="mb-1 flex items-center gap-1.5 last:mb-0"
+            title={`${workerDisplayLabel(w)} · ${w.start}s–${w.end}s`}
+          >
+            <span className="w-[52px] shrink-0 truncate text-[8px] text-white/40">
+              {workerShortId(w)}
+            </span>
+            <div className="mini-gantt-track relative min-w-0 flex-1">
+              <div
+                className={`mini-gantt-bar ${
+                  w.is_local ? "mini-gantt-bar-local" : "mini-gantt-bar-cloud"
+                } ${isRunning ? "mini-gantt-bar-live" : ""}`}
+                style={{ left: `${left}%`, width: `${widthPct}%` }}
+              />
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function DoneSummary({ workers, metrics, cost }) {
+  const n = workers?.length ?? 0;
+  const span = metrics?.span_sec ?? 0;
+  const total = cost?.total ?? 0;
+  const local =
+    metrics?.workers?.local ?? workers?.filter((w) => w.is_local).length ?? 0;
+  const cloud =
+    metrics?.workers?.cloud ?? workers?.filter((w) => !w.is_local).length ?? 0;
+
+  return (
+    <p className="done-summary">
+      {n} workers · {span.toFixed(1)}s · ${total.toFixed(3)} · {local} local / {cloud}{" "}
+      cloud
+    </p>
+  );
+}
+
+function EventToastStack({ toasts }) {
+  if (!toasts.length) return null;
+
+  return (
+    <div className="event-toast-stack pointer-events-none absolute left-3 right-3 top-3 z-30 flex flex-col gap-2">
+      {toasts.map((t) => (
+        <div key={t.id} className={`event-toast event-toast-${t.variant}`}>
+          {t.message}
+        </div>
+      ))}
+    </div>
+  );
+}
 
 function routingHeaderMeta(routing, workerMetrics, workers) {
   const summary = routing?.summary || "Idle — submit a task to route";
@@ -118,7 +284,11 @@ function RoutingFlow({
   fallbackDetected,
   localEnabled,
   cloudEnabled,
+  phase,
+  running,
 }) {
+  const fanoutActive = running && phase === "fanout";
+  const detailsOpen = fanoutActive || (routing?.mode === 3 && running);
   const localWorkers = (workers ?? []).filter((w) => w.is_local);
   const cloudWorkers = (workers ?? []).filter((w) => !w.is_local);
   const hasLocalWorkers = localWorkers.length > 0;
@@ -179,8 +349,10 @@ function RoutingFlow({
         </div>
       </div>
 
+      <MiniGantt workers={workers} />
+
       {workerTotal > 0 && (
-        <details className="routing-workers-details">
+        <details className="routing-workers-details" open={detailsOpen}>
           <summary>
             Workers ({localCount}L · {cloudCount}C)
             <ChevronDown className="routing-workers-chevron h-3 w-3 opacity-60" />
@@ -292,8 +464,11 @@ function RunButton({ busy, running, hasTask, onClick }) {
   );
 }
 
-function AutoGrowTextarea({ value, onChange, onSubmit, disabled, placeholder }) {
-  const ref = useRef(null);
+const AutoGrowTextarea = forwardRef(function AutoGrowTextarea(
+  { value, onChange, onSubmit, disabled, placeholder },
+  ref,
+) {
+  const innerRef = useRef(null);
 
   const resize = useCallback(() => {
     const el = ref.current;
@@ -308,9 +483,18 @@ function AutoGrowTextarea({ value, onChange, onSubmit, disabled, placeholder }) 
     resize();
   }, [value, resize]);
 
+  const setRefs = useCallback(
+    (el) => {
+      innerRef.current = el;
+      if (typeof ref === "function") ref(el);
+      else if (ref) ref.current = el;
+    },
+    [ref],
+  );
+
   return (
     <textarea
-      ref={ref}
+      ref={setRefs}
       value={value}
       onChange={(e) => {
         onChange(e.target.value);
@@ -328,7 +512,7 @@ function AutoGrowTextarea({ value, onChange, onSubmit, disabled, placeholder }) 
       className="input-glass min-h-[46px] flex-1 resize-none overflow-y-auto px-4 py-3 text-sm leading-[22px] text-white/85 transition-all duration-300 placeholder:text-white/30 disabled:opacity-50"
     />
   );
-}
+});
 
 export default function MainHub() {
   const {
@@ -353,8 +537,12 @@ export default function MainHub() {
 
   const feedRef = useRef(null);
   const feedEndRef = useRef(null);
+  const promptRef = useRef(null);
   const stickToBottomRef = useRef(true);
   const [showNewActivity, setShowNewActivity] = useState(false);
+
+  const phase = payload?.phase;
+  const workerSpanSec = payload?.metrics?.span_sec ?? 0;
 
   const events = useMemo(
     () => sortEventsByTs(payload?.events),
@@ -363,11 +551,34 @@ export default function MainHub() {
   const workers = payload?.workers ?? [];
   const displayTask = currentTask || payload?.task;
   const costStopped = Boolean(payload?.cost?.stopped);
+  const costWarning = Boolean(payload?.cost?.warning);
   const costOverCap =
     costStopped ||
     (payload?.cost &&
       (payload.cost.fraction >= 1 || payload.cost.total >= payload.cost.cap));
   const compactionCount = events.filter((e) => e.kind === "compaction").length;
+  const toasts = useEventToasts(
+    events,
+    costStopped,
+    phase,
+    payload?.run_id,
+  );
+
+  useEffect(() => {
+    const onKeyDown = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+        e.preventDefault();
+        handleRun();
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        promptRef.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [handleRun]);
 
   const scrollToBottom = useCallback((behavior = "smooth") => {
     feedEndRef.current?.scrollIntoView({ behavior });
@@ -416,10 +627,14 @@ export default function MainHub() {
               </div>
               <p className="text-xs text-white/45">
                 {running
-                  ? `Running · ${payload?.phase ?? "…"}`
-                  : connected
-                    ? "Ready"
-                    : streamError || "Waiting for backend"}
+                  ? `Running · ${phase ?? "…"}${
+                      workerSpanSec > 0 ? ` · ${workerSpanSec.toFixed(1)}s` : ""
+                    }`
+                  : phase === "done" && workerSpanSec > 0
+                    ? `Done · ${workerSpanSec.toFixed(1)}s`
+                    : connected
+                      ? "Ready"
+                      : streamError || "Waiting for backend"}
                 {isMock && " · mock SSE"}
               </p>
             </div>
@@ -437,10 +652,11 @@ export default function MainHub() {
                 type="button"
                 onClick={handleCompact}
                 disabled={!running || isMock}
-                title="Compact session"
-                className="glass-card rounded-xl p-2 text-white/45 transition-all duration-300 hover:text-bifrost disabled:opacity-40"
+                title="Compact worker sessions now, or type /compact in the prompt"
+                className="glass-card flex items-center gap-1.5 rounded-xl px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-white/45 transition-all duration-300 hover:text-bifrost disabled:opacity-40"
               >
-                <Shrink className="h-4 w-4" />
+                <Shrink className="h-3.5 w-3.5 shrink-0" />
+                Compact
               </button>
               <button
                 type="button"
@@ -460,8 +676,15 @@ export default function MainHub() {
 
         <MissionStrip
           task={displayTask}
-          phase={payload?.phase}
+          phase={phase}
           running={running}
+        />
+
+        <PhaseSteps
+          phase={phase}
+          running={running}
+          routing={payload?.routing}
+          metrics={payload?.metrics}
         />
 
         <section className="mb-1.5 shrink-0">
@@ -481,6 +704,8 @@ export default function MainHub() {
             fallbackDetected={payload?.fallback_detected}
             localEnabled={localEnabled}
             cloudEnabled={cloudEnabled}
+            phase={phase}
+            running={running}
           />
         </section>
 
@@ -497,11 +722,21 @@ export default function MainHub() {
           </div>
 
           <div className="relative min-h-0 flex-1">
+            <EventToastStack toasts={toasts} />
             <div
               ref={feedRef}
               onScroll={handleFeedScroll}
               className="chat-grid-bg h-full min-h-0 overflow-y-auto p-4 scrollbar-thin"
             >
+              {costWarning && !costStopped && (
+                <div className="cost-warning-banner mb-3">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" strokeWidth={2.25} />
+                  <span>
+                    Budget at {Math.round((payload.cost.fraction ?? 0) * 100)}% — approaching cap ($
+                    {payload.cost.total?.toFixed(4)} / ${payload.cost.cap}).
+                  </span>
+                </div>
+              )}
               {costStopped && (
                 <div className="cap-banner mb-3">
                   <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" strokeWidth={2.25} />
@@ -510,6 +745,12 @@ export default function MainHub() {
                   </span>
                 </div>
               )}
+              <RunSummary
+                built={payload?.built}
+                runSummary={payload?.run_summary}
+                logPath={payload?.log_path}
+                phase={phase}
+              />
               {events.length > 0 && (
                 <ul className="mb-3 space-y-2">
                   {events.map((ev, i) => (
@@ -523,6 +764,13 @@ export default function MainHub() {
                     />
                   ))}
                 </ul>
+              )}
+              {phase === "done" && (payload?.result || workers.length > 0) && (
+                <DoneSummary
+                  workers={workers}
+                  metrics={payload?.metrics}
+                  cost={payload?.cost}
+                />
               )}
               {payload?.result && (
                 <div className="result-panel p-4">
@@ -541,9 +789,18 @@ export default function MainHub() {
                 </div>
               )}
               {!displayTask && events.length === 0 && !payload?.result && (
-                <p className="text-sm text-white/45">
-                  Submit a task to start the orchestrator (backend on :8000).
-                </p>
+                <div className="hub-empty-state text-sm leading-relaxed text-white/50">
+                  <p className="mb-2 font-medium text-white/65">
+                    Bifrost agent
+                  </p>
+                  <p className="mb-2 text-xs text-white/45">
+                    Parallel workers · bash execution · section editing · cost
+                    monitoring · safety guard
+                  </p>
+                  <p className="text-xs text-white/35">
+                    Enter a task below or press ⌘K to focus the prompt.
+                  </p>
+                </div>
               )}
               <div ref={feedEndRef} />
             </div>
@@ -581,14 +838,15 @@ export default function MainHub() {
               </div>
             </div>
             <AutoGrowTextarea
+              ref={promptRef}
               value={task}
               onChange={setTask}
               onSubmit={handleRun}
               disabled={busy}
               placeholder={
                 running
-                  ? "Write a follow-up prompt…"
-                  : "Enter orchestrator task…"
+                  ? "Follow-up or /compact… (⌘↵ run)"
+                  : "Enter task… (⌘K focus · ⌘↵ run)"
               }
             />
             <RunButton

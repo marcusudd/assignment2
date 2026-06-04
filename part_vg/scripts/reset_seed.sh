@@ -53,5 +53,12 @@ touch schemas/__init__.py
 touch routers/__init__.py
 touch tests/__init__.py
 
+cat > conftest.py << 'PYEOF'
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+PYEOF
+
 echo "Done. Workspace:"
 find . -type f -not -name ".gitkeep" | sort

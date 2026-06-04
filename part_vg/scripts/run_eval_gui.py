@@ -2,7 +2,7 @@
 """
 Trigger eval-ladder tasks via POST /api/run so the web GUI (SSE) shows live progress.
 
-CLI runs (main.py) do NOT appear in the GUI — use this script instead.
+CLI runs (main.py) do NOT appear in the GUI — use run_via_api.py or this script instead.
 """
 from __future__ import annotations
 

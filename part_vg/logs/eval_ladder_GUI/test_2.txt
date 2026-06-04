@@ -1,0 +1,1 @@
+Read models/item.py and summarize the Item model fields in two bullet points.

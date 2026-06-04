@@ -2,7 +2,7 @@
 import time
 
 from cost import CostTracker
-from serializer import build_payload
+from serializer import _routing_reasoning, build_payload
 from state import StateRegistry, WorkerState
 
 
@@ -186,3 +186,38 @@ def test_span_live_false_when_cost_cap_stopped():
     payload = build_payload(registry, cost, [], running=True)
     assert payload["cost"]["stopped"] is True
     assert payload["metrics"]["span_live"] is False
+
+
+def test_routing_reasoning_parsed():
+    assert _routing_reasoning("Mode 3: Four files (4 worker(s))") == "Four files"
+    assert _routing_reasoning("") == ""
+
+
+def test_built_run_summary_evidence():
+    registry = StateRegistry()
+    registry.set_phase("done")
+    registry.set_routing(3, "Mode 3: parallel (2 workers)")
+    ws = WorkerState(
+        worker_id="midgard.a",
+        role="coder",
+        task_summary="x",
+        backend="local-0",
+        model="m",
+    )
+    ws.log_lines = ["▶ read_file: models/a.py", "← BLOCKED rm -rf"]
+    registry.register(ws)
+
+    payload = build_payload(
+        registry,
+        _tracker(),
+        [],
+        running=False,
+        built={"created": ["models/a.py"], "modified": []},
+        log_path="/tmp/test.log",
+    )
+    assert payload["built"]["created"] == ["models/a.py"]
+    assert payload["run_summary"]["files_created"] == 1
+    assert payload["log_path"] == "/tmp/test.log"
+    assert payload["routing"]["reasoning"] == "parallel"
+    assert len(payload["evidence"]["tools"]) >= 1
+    assert len(payload["evidence"]["blocks"]) >= 1

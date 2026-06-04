@@ -1,0 +1,1 @@
+Implement a production-grade distributed order-saga system with Redis-backed orchestration, OAuth2 authorization, event sourcing, optimistic concurrency, idempotency keys, audit logs, formal correctness proofs, and 100% pytest coverage across the entire workspace. Migrate every affected file and make the full test suite pass.

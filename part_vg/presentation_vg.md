@@ -59,7 +59,7 @@ ROUTER_MODEL=openai/gpt-5-mini
 COMPACTION_MODEL=local
 ```
 
-**Viktigt:** Körningar syns i GUI bara om de startas via **Kör-knappen** eller `POST /api/run` (`scripts/run_eval_gui.py`). CLI (`main.py`) uppdaterar inte SSE-panelen.
+**Viktigt:** Körningar syns i GUI om de startas via **Kör**, `POST /api/run`, eller **`python scripts/run_via_api.py`** (officiell terminalväg). Direct CLI (`main.py`) uppdaterar inte SSE — använd den som offline-fallback.
 
 ---
 
@@ -112,8 +112,8 @@ Användare → React GUI (SSE)
 | ------------------------------ | ----------------------------------------------------------------------- |
 | **Realm Operations (vänster)** | Midgard = lokal backend, Asgard = moln. Toggles påverkar nästa körning. |
 | **local-0 LOADED**             | Modell-ID som LM Studio faktiskt har laddat — måste matcha `.env`.      |
-| **Bifrost Router (mitten)**    | Routing-banner, aktivitetsflöde, resultat, cap-fält, Reset.             |
-| **Heimdall (höger)**           | Kostnad, tidslinje, token-fördelning, "Saved vs all-Haiku".             |
+| **Bifrost Router (mitten)**    | Mode 3-badge, **Parallel lanes**, routing, aktivitet, **Built**-sammanfattning, cap, Reset. |
+| **Heimdall (höger)**           | Kostnad, Evidence/proof, worker-loggar, "Saved vs all-Haiku".           |
 
 **Cap-fält:** Sätt **$0.20** för enkla tester, **$0.35** för hero. Cap är per körning, inte per session.
 
@@ -373,17 +373,26 @@ Filer med samma prompts: `logs/eval_ladder_GUI/test_1.txt` … `test_5.txt`
 
 ---
 
-## Referens — senaste lyckade eval (2026-06-03)
+## Referens — senaste lyckade eval (2026-06-04)
+
+Verifierat via `python scripts/run_via_api.py` mot `http://localhost:8000` (Docker + LM Studio).
 
 | Test | Routing                   | Kostnad | Notering                    |
 | ---- | ------------------------- | ------- | --------------------------- |
-| 1    | Mode 1 local              | $0.00   | Lokal 26b-mlx               |
-| 2    | Mode 2 cloud              | $0.003  | Router fallback             |
-| 3    | Mode 2 cloud              | $0.041  | /items OK                   |
-| 4    | Mode 3, 3 local + 1 cloud | $0.175  | Integration OK, tester pass |
-| 5    | Mode 2, cap stop          | $0.022  | Avsiktlig abort             |
+| 1    | Mode 1, 1L/0C             | $0.00   | List files, ~4s             |
+| 2    | Mode 2 cloud (ej omkört)  | —       | Se `test_2.txt` i eval ladder |
+| 3    | Mode 3, 1L/1C + integration | $0.048 | `/items`, 9 pytest pass     |
+| 4    | Mode 3, 3L/1C + integration | $0.305 | Hero orders, 31 pytest pass |
+| 5    | Mode 2, 0L/1C, cap stop   | $0.039  | ABORTED @ cap $0.02 (VG.3)  |
+| säk  | Mode 1, 1L/0C             | $0.00   | `rm -rf` — modell vägrar (ej bash BLOCKED på Mode 1) |
 
-Loggar: `logs/eval_gui_20260603_175127/`, `logs/eval_gui_runner.log`
+**Router (2026-06-04):** `--no-cloud` planerar nu **0C** i GUI (t.ex. `3L/0C` på hero om Asgard av).
+
+**Efter hero:** kör `bash scripts/verify_orders.sh` **innan** nästa Reset (test 5 resettar workspace).
+
+Promptfiler: [`logs/eval_ladder_GUI/`](logs/eval_ladder_GUI/) (`test_1.txt` … `test_5.txt`).
+
+Loggar: `logs/20260604_094828_*` (test 1) … `logs/20260604_095158_*` (test 5).
 
 ---
 

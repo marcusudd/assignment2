@@ -38,6 +38,10 @@ export function isLocalModel(modelId, config) {
   return false;
 }
 
+export function isCompactCommand(text) {
+  return /^\/compact\b/i.test((text || "").trim());
+}
+
 export function BifrostProvider({ children }) {
   const { payload, connected, streamError, isMock } = useEventStream();
   const [config, setConfig] = useState(null);
@@ -113,10 +117,39 @@ export function BifrostProvider({ children }) {
   const hasCloud = Boolean(config?.cloud) || (payload?.workers ?? []).some((w) => !w.is_local);
   const cloudKeyConfigured = isMock || Boolean(config?.cloud);
 
+  const running = Boolean(payload?.running);
+
+  const requestCompact = useCallback(async () => {
+    if (isMock) {
+      setStatus("Mock mode — compact unavailable");
+      return;
+    }
+    if (!running) {
+      setStatus("Compact only works during an active run");
+      return;
+    }
+    try {
+      await compactSession();
+      setStatus("Compaction requested — fires when a session has enough history");
+    } catch (e) {
+      setStatus(e.message);
+    }
+  }, [isMock, running]);
+
   const handleRun = useCallback(async () => {
     const text = task.trim();
     if (!text) {
       setStatus("Enter a task first");
+      return;
+    }
+    if (isCompactCommand(text)) {
+      setTask("");
+      setBusy(true);
+      try {
+        await requestCompact();
+      } finally {
+        setBusy(false);
+      }
       return;
     }
     if (!localEnabled && !cloudEnabled) {
@@ -142,7 +175,7 @@ export function BifrostProvider({ children }) {
     } finally {
       setBusy(false);
     }
-  }, [task, cap, isMock, localEnabled, cloudEnabled]);
+  }, [task, cap, isMock, localEnabled, cloudEnabled, requestCompact]);
 
   const handleReset = useCallback(async () => {
     if (isMock) {
@@ -163,18 +196,7 @@ export function BifrostProvider({ children }) {
     }
   }, [isMock]);
 
-  const handleCompact = useCallback(async () => {
-    if (isMock) {
-      setStatus("Mock mode — compact unavailable");
-      return;
-    }
-    try {
-      await compactSession();
-      setStatus("Compaction requested — fires when a session has enough history");
-    } catch (e) {
-      setStatus(e.message);
-    }
-  }, [isMock]);
+  const handleCompact = requestCompact;
 
   const value = useMemo(
     () => ({
@@ -209,7 +231,7 @@ export function BifrostProvider({ children }) {
       handleRun,
       handleReset,
       handleCompact,
-      running: Boolean(payload?.running),
+      running,
     }),
     [
       payload,
@@ -237,6 +259,7 @@ export function BifrostProvider({ children }) {
       handleRun,
       handleReset,
       handleCompact,
+      running,
     ],
   );
 

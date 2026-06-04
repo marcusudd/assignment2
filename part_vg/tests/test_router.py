@@ -164,8 +164,34 @@ def test_classify_backend_functions():
     assert _classify_backend("test_orders.py") == "cloud"
     assert _classify_backend("routers/orders.py") == "local"
     assert _classify_backend("models/order.py") == "local"
+    assert _classify_backend("tests/test_orders.py", allow_cloud=False) == "local"
+    assert _classify_backend("test_orders.py", allow_cloud=False) == "local"
     assert _classify_tier("models/order.py") == "light"
     assert _classify_tier("schemas/order.py") == "light"
     assert _classify_tier("migrations/001.py") == "light"
     assert _classify_tier("routers/orders.py") == "standard"
     assert _classify_tier("services/billing.py") == "standard"
+
+
+def test_fast_path_no_cloud_all_local():
+    r = _router()
+    task = (
+        "Create models/order.py, schemas/order.py, routers/orders.py, "
+        "and tests/test_orders.py"
+    )
+    plan = r._fast_decompose(task, allow_cloud=False)
+    assert plan is not None
+    assert plan.mode == 3
+    assert all(w.backend_name == "local" for w in plan.workers)
+    assert sum(1 for w in plan.workers if w.backend_name == "cloud") == 0
+    assert "0 cloud" in plan.reasoning
+
+
+def test_plan_no_cloud_calculator_task():
+    r = _router()
+    task = (
+        "Add calculator_gui.py — a Tkinter GUI calculator that imports Calculator "
+        "from calculator.py. Do not modify calculator.py or any test files."
+    )
+    plan = r.plan(task, allow_cloud=False)
+    assert all(w.backend_name == "local" for w in plan.workers)

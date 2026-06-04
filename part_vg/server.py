@@ -24,6 +24,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from preflight import run_preflight
 from session_log import (
     LOG_DIR,
     Tee,
@@ -32,6 +33,7 @@ from session_log import (
     read_log_tail,
     write_session_summary,
 )
+from workspace_diff import diff_workspace, snapshot_workspace
 
 _HERE = Path(__file__).parent
 _POLL_S = 0.25
@@ -104,7 +106,9 @@ def _run_orchestrator(
     log_fh = None
     real_stderr = sys.stderr
     orch = None
+    before_files: dict[str, float] = {}
     try:
+        before_files = snapshot_workspace(config.workspace_dir)
         log_path, log_fh = open_session_log(task, run_id=holder.get("run_id"))
         holder["log_path"] = str(log_path)
         sys.stderr = Tee(real_stderr, log_fh)  # type: ignore[assignment]
@@ -138,10 +142,18 @@ def _run_orchestrator(
         if registry is not None:
             registry.set_phase("done")
     finally:
+        created, modified = diff_workspace(
+            before_files, snapshot_workspace(config.workspace_dir)
+        )
+        holder["built"] = {"created": created, "modified": modified}
         registry = holder.get("registry")
         cost_tracker = holder.get("cost_tracker")
         if log_fh is not None and registry is not None and cost_tracker is not None:
             snap = cost_tracker.snapshot()
+            built_tuple = None
+            built = holder.get("built")
+            if built:
+                built_tuple = (built.get("created", []), built.get("modified", []))
             write_session_summary(
                 log_fh,
                 task=task,
@@ -150,6 +162,7 @@ def _run_orchestrator(
                 registry=registry,
                 routing=orch.routing_summary if orch else "",
                 error=holder.get("error"),
+                built=built_tuple,
             )
         if log_fh is not None:
             sys.stderr = real_stderr
@@ -196,11 +209,25 @@ def api_log_tail(filename: str, lines: int = 200) -> dict:
     return {"name": filename, "tail": body}
 
 
+@app.get("/api/preflight")
+def api_preflight() -> dict:
+    if _MOCK_SSE:
+        return {
+            "ready": True,
+            "checks": [{"id": "mock", "label": "Mock mode", "ok": True, "detail": "BIFROST_MOCK", "critical": False}],
+        }
+    return run_preflight(
+        toml_path=_HERE / "config.toml",
+        env_path=_HERE / ".env",
+        api_base="http://127.0.0.1:8000",
+    )
+
+
 @app.get("/api/config")
 def api_config() -> dict:
     from config import Config
     from backends import resolve
-    from llm import list_models
+    from llm import health_check, list_models
 
     config = Config.load(toml_path=str(_HERE / "config.toml"), env_path=str(_HERE / ".env"))
     local_backends, cloud_backend = resolve(config)
@@ -232,6 +259,12 @@ def api_config() -> dict:
         },
         "router_model": config.router_model,
         "compaction_model": config.compaction_model,
+        "openrouter_configured": bool(config.openrouter_api_key),
+        "lm_studio_reachable": bool(served) or health_check(
+            config.locals[0].base_url, config.locals[0].api_key
+        )
+        if config.locals
+        else False,
     }
 
 
@@ -379,10 +412,12 @@ async def api_events() -> StreamingResponse:
                             result=holder.get("result"),
                             running=holder.get("running", False),
                             run_end_ts=holder.get("run_end_ts"),
+                            built=holder.get("built"),
+                            log_path=holder.get("log_path"),
                         )
                     if holder.get("error"):
                         payload["error"] = holder["error"]
-                    if holder.get("log_path"):
+                    elif holder.get("log_path") and "log_path" not in payload:
                         payload["log_path"] = holder["log_path"]
 
             yield f"data: {json.dumps(payload)}\n\n"

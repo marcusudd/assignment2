@@ -137,6 +137,27 @@ def _worker_end_rel(
     return None
 
 
+def _extract_tool_evidence(events: list[dict[str, Any]]) -> dict[str, Any]:
+    tools: list[dict[str, str]] = []
+    blocks: list[dict[str, str]] = []
+    for ev in events:
+        text = ev.get("text") or ""
+        kind = ev.get("kind")
+        if kind == "blocked":
+            blocks.append({"text": text, "worker": ev.get("worker")})
+            continue
+        if kind != "action":
+            continue
+        for name in ("read_file", "write_file", "edit_file", "bash"):
+            if name in text:
+                tools.append({"tool": name, "text": text, "worker": ev.get("worker")})
+                break
+    return {
+        "tools": tools[-30:],
+        "blocks": blocks[-10:],
+    }
+
+
 def build_payload(
     registry: StateRegistry,
     cost_tracker: CostTracker,
@@ -147,6 +168,8 @@ def build_payload(
     result: str | None = None,
     running: bool = False,
     run_end_ts: float | None = None,
+    built: dict[str, list[str]] | None = None,
+    log_path: str | None = None,
 ) -> dict[str, Any]:
     states = registry.snapshot()
     phase = registry.get_phase()
@@ -209,7 +232,11 @@ def build_payload(
     ends = [w["end"] for w in worker_rows if w["end"] is not None]
     span_sec = round(max(ends), 2) if ends else 0.0
 
-    return {
+    created = (built or {}).get("created") or []
+    modified = (built or {}).get("modified") or []
+    evidence = _extract_tool_evidence(events)
+
+    payload: dict[str, Any] = {
         "run_id": run_id,
         "task": task,
         "running": running,
@@ -218,6 +245,7 @@ def build_payload(
         "routing": {
             "mode": routing_mode,
             "summary": routing_summary,
+            "reasoning": _routing_reasoning(routing_summary),
         },
         "workers": worker_rows,
         "cost": {
@@ -240,4 +268,36 @@ def build_payload(
                 "by_role": by_role,
             },
         },
+        "evidence": evidence,
     }
+    if built is not None:
+        payload["built"] = {"created": created, "modified": modified}
+    if log_path:
+        payload["log_path"] = log_path
+    if not running and phase == "done":
+        payload["run_summary"] = {
+            "workers": len(worker_rows),
+            "span_sec": span_sec,
+            "cost_usd": round(snap["total_usd"], 6),
+            "cap_usd": snap["cap_usd"],
+            "stopped": cost_tracker.should_stop(),
+            "warning": cost_tracker.is_warning(),
+            "files_created": len(created),
+            "files_modified": len(modified),
+        }
+    return payload
+
+
+def _routing_reasoning(summary: str) -> str:
+    """Parse short router reasoning from orchestrator summary line."""
+    if not summary:
+        return ""
+    if summary.startswith("Mode "):
+        rest = summary.split(": ", 1)
+        if len(rest) < 2:
+            return summary
+        tail = rest[1]
+        if " (" in tail:
+            return tail.rsplit(" (", 1)[0].strip()
+        return tail.strip()
+    return summary

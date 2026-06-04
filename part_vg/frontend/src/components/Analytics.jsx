@@ -1,6 +1,7 @@
 import { useMemo, useState, useEffect } from "react";
 import { Activity } from "lucide-react";
 import { useBifrost } from "../BifrostContext.jsx";
+import EvidencePanel from "./EvidencePanel.jsx";
 import LogEntry from "./LogEntry.jsx";
 import { sortEventsByTs } from "../utils/logFormat.js";
 import { workerDisplayLabel, workerShortId } from "../utils/workerLabel.js";
@@ -463,6 +464,7 @@ export default function Analytics() {
           />
           <LatencyGauge value={workerSpanSec} max={15} live={spanLive} />
           <TokensBarChart workers={workers} />
+          <EvidencePanel />
           <WorkerLogTabs workers={workers} events={events} />
 
           <div className="glass-card overflow-hidden p-4">

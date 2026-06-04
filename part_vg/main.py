@@ -1,10 +1,14 @@
 """
-Bifrost — entry point.
+Bifrost — entry point (direct Rich TUI, offline fallback).
+
+For runs visible in the web GUI, use: python scripts/run_via_api.py
 
 Usage:
   python main.py "Add /orders endpoint with business logic"
   python main.py --cap 0.05 "List all Python files in the workspace"
   python main.py --interactive          # REPL: run tasks one after another
+  python main.py --no-local "..."       # Midgard off (cloud only)
+  python main.py --no-cloud "..."       # Asgard off (local only)
   python main.py --no-verbose "..."     # Simple UI without per-worker log
 
 All options can also be set via config.toml / .env.
@@ -17,6 +21,7 @@ import time
 from pathlib import Path
 
 from session_log import Tee, open_session_log, write_session_summary
+from workspace_diff import diff_workspace, snapshot_workspace
 
 
 def _load_system_prompt(config) -> str:
@@ -34,6 +39,20 @@ def _load_system_prompt(config) -> str:
 def _reset_workspace() -> None:
     script = Path(__file__).parent / "scripts" / "reset_seed.sh"
     subprocess.run(["bash", str(script)], check=False)
+
+
+def _api_compact(base: str = "http://127.0.0.1:8000") -> str | None:
+    """Request compaction on the active API run; None if server unavailable."""
+    try:
+        import httpx
+
+        r = httpx.post(f"{base.rstrip('/')}/api/compact", timeout=3.0)
+        if r.status_code == 200:
+            return "Compaction requested (API run)."
+        detail = r.json().get("detail", r.text)
+        return f"Compact failed: {detail}"
+    except Exception as e:
+        return None
 
 
 def _read_task_input(prompt: str) -> str | None:
@@ -74,6 +93,9 @@ def _run_task(
     cloud_backend,
     system_prompt: str,
     verbose: bool,
+    *,
+    allow_local: bool = True,
+    allow_cloud: bool = True,
 ) -> None:
     from cost import CostTracker
     from orchestrator import Orchestrator
@@ -108,7 +130,11 @@ def _run_task(
             cost_tracker=cost_tracker,
             registry=registry,
             worker_system_prompt=system_prompt,
+            allow_local=allow_local,
+            allow_cloud=allow_cloud,
         )
+
+        before_files = snapshot_workspace(config.workspace_dir)
 
         dashboard.start()
         try:
@@ -124,6 +150,17 @@ def _run_task(
         print("Result:")
         print(result)
         print("=" * 60)
+
+        created, modified = diff_workspace(
+            before_files, snapshot_workspace(config.workspace_dir)
+        )
+        print("\nBuilt:")
+        if not created and not modified:
+            print("  (no file changes)")
+        for f in created:
+            print(f"  + {f}")
+        for f in modified:
+            print(f"  ~ {f}")
 
         snap = cost_tracker.snapshot()
         print(f"\nCost: ${snap['total_usd']:.4f} / ${snap['cap_usd']:.2f}")
@@ -142,6 +179,7 @@ def _run_task(
             snap=snap,
             registry=registry,
             routing=orch.routing_summary,
+            built=(created, modified),
         )
 
     finally:
@@ -159,9 +197,22 @@ def main() -> None:
     parser.add_argument("--cap", type=float, help="Override cost cap (USD)")
     parser.add_argument("--config", default="config.toml", help="Config file path")
     parser.add_argument("--no-verbose", action="store_true", help="Simple UI")
+    parser.add_argument("--no-local", action="store_true", help="Disable Midgard (local workers)")
+    parser.add_argument("--no-cloud", action="store_true", help="Disable Asgard (cloud workers)")
+    parser.add_argument(
+        "--api-base",
+        default="http://127.0.0.1:8000",
+        help="Base URL for REPL 'compact' when server is running (default :8000)",
+    )
     parser.add_argument("--interactive", "-i", action="store_true",
                         help="REPL mode: run tasks one after another, workspace persists")
     args = parser.parse_args()
+
+    if args.no_local and args.no_cloud:
+        print("Enable at least one realm (omit --no-local and --no-cloud).", file=sys.stderr)
+        sys.exit(2)
+    allow_local = not args.no_local
+    allow_cloud = not args.no_cloud
 
     from config import Config
     config = Config.load(toml_path=args.config)
@@ -182,12 +233,14 @@ def main() -> None:
         # ----------------------------------------------------------------
         print("\n" + "─" * 60)
         print("  Bifrost — interactive mode")
-        print("  Commands: 'reset' → restore seed app   'exit' → quit")
+        print("  Commands: cap <usd> · reset · compact · local on|off · cloud on|off · exit")
+        print("  compact → POST /api/compact when server is up; else use scripts/run_via_api.py")
         print("  Multi-line / pasted prompts are accepted.")
         print(f"  Cap ${config.cost_cap_usd:.2f} is applied PER task (not session).")
+        print(f"  Realms: Midgard={'on' if allow_local else 'off'} · Asgard={'on' if allow_cloud else 'off'}")
         print("─" * 60)
         while True:
-            task = _read_task_input("\n🌉 Task: ")
+            task = _read_task_input(f"\n🌉 [cap ${config.cost_cap_usd:.2f}] Task: ")
             if task is None:
                 print("\nBye!")
                 break
@@ -200,10 +253,48 @@ def main() -> None:
                 _reset_workspace()
                 print("Workspace reset to seed app.")
                 continue
+            if task.lower() == "compact":
+                msg = _api_compact(args.api_base)
+                if msg:
+                    print(msg)
+                else:
+                    print(
+                        "No API server — start uvicorn server:app or use "
+                        "scripts/run_via_api.py -i for compact during GUI runs."
+                    )
+                continue
+            if task.lower() in ("local on", "local off"):
+                allow_local = task.lower().endswith("on")
+                print(f"Midgard {'on' if allow_local else 'off'} for next task.")
+                continue
+            if task.lower() in ("cloud on", "cloud off"):
+                allow_cloud = task.lower().endswith("on")
+                print(f"Asgard {'on' if allow_cloud else 'off'} for next task.")
+                continue
+            if task.lower() == "cap" or task.lower().startswith("cap "):
+                parts = task.split()
+                if len(parts) == 2:
+                    try:
+                        config.cost_cap_usd = float(parts[1])
+                        print(f"Cost cap set to ${config.cost_cap_usd:.2f} (applies to the next task).")
+                    except ValueError:
+                        print("Usage: cap <usd>, e.g. cap 0.50")
+                else:
+                    print(f"Current cap: ${config.cost_cap_usd:.2f}. Usage: cap <usd>")
+                continue
 
             # Re-resolve backends so LM Studio coming online mid-session is detected.
             local_backends, cloud_backend = resolve(config)
-            _run_task(task, config, local_backends, cloud_backend, system_prompt, verbose)
+            _run_task(
+                task,
+                config,
+                local_backends,
+                cloud_backend,
+                system_prompt,
+                verbose,
+                allow_local=allow_local,
+                allow_cloud=allow_cloud,
+            )
             print()   # blank line before next prompt
     else:
         # ----------------------------------------------------------------
@@ -211,7 +302,13 @@ def main() -> None:
         # ----------------------------------------------------------------
         _run_task(
             " ".join(args.task),
-            config, local_backends, cloud_backend, system_prompt, verbose,
+            config,
+            local_backends,
+            cloud_backend,
+            system_prompt,
+            verbose,
+            allow_local=allow_local,
+            allow_cloud=allow_cloud,
         )
 
 

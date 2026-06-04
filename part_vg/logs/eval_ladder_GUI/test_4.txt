@@ -1,0 +1,3 @@
+Add a complete /orders resource. An order has items, quantities, and a total price.
+Create models/order.py, schemas/order.py, routers/orders.py, and tests/test_orders.py.
+Register the router in main.py and make sure pytest passes.

@@ -1,6 +1,45 @@
+import io
 from pathlib import Path
 
 import session_log
+
+
+class _FakeRegistry:
+    def snapshot(self):
+        return []
+
+
+_SNAP = {"total_usd": 0.0, "cap_usd": 0.20}
+
+
+def test_summary_writes_built_section():
+    buf = io.StringIO()
+    session_log.write_session_summary(
+        buf,
+        task="t",
+        result="done",
+        snap=_SNAP,
+        registry=_FakeRegistry(),
+        routing="Mode 1",
+        built=(["models/order.py"], ["main.py"]),
+    )
+    out = buf.getvalue()
+    assert "=== BUILT ===" in out
+    assert "+ models/order.py" in out
+    assert "~ main.py" in out
+
+
+def test_summary_built_none_omits_section():
+    buf = io.StringIO()
+    session_log.write_session_summary(
+        buf,
+        task="t",
+        result="done",
+        snap=_SNAP,
+        registry=_FakeRegistry(),
+        routing="Mode 1",
+    )
+    assert "=== BUILT ===" not in buf.getvalue()
 
 
 def test_list_and_tail(tmp_path, monkeypatch):

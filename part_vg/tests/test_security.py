@@ -7,8 +7,29 @@ from pathlib import Path
 WS = "/tmp/bifrost_test_workspace"
 
 
-def test_recursive_delete_blocked():
+def test_root_recursive_delete_blocked():
+    # Escapes the workspace (bare /), so blocked.
     assert security_check("rm -rf /", WS) is not None
+
+
+def test_workspace_delete_allowed():
+    # Policy: free to create/edit/delete inside the workspace, incl. folders.
+    assert security_check("rm main.py", WS) is None
+    assert security_check("rm models/order.py", WS) is None
+    assert security_check("rm -rf build", WS) is None
+    assert security_check("rmdir models", WS) is None
+
+
+def test_parent_traversal_blocked():
+    assert security_check("rm ../secret.txt", WS) is not None
+    assert security_check("cat ../../etc/passwd", WS) is not None
+    assert security_check("cd ..", WS) is not None
+    assert security_check('rm "../x"', WS) is not None
+
+
+def test_external_write_outside_workspace_blocked():
+    assert security_check("cat /tmp/secret", WS) is not None
+    assert security_check("cp data.txt /tmp/exfil", WS) is not None
 
 
 def test_fork_bomb_blocked():
@@ -30,6 +51,14 @@ def test_env_dump_blocked():
 
 def test_secret_expansion_blocked():
     assert security_check("echo $OPENROUTER_API_KEY", WS) is not None
+
+
+def test_home_var_expansion_blocked():
+    # Env-var paths that point outside the workspace must not slip through.
+    assert security_check("rm -rf $HOME", WS) is not None
+    assert security_check("cat $HOME/.ssh/id_rsa", WS) is not None
+    assert security_check("cd $OLDPWD", WS) is not None
+    assert security_check("echo ${HOME}", WS) is not None
 
 
 def test_external_path_blocked():

@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   ChevronDown,
   Cloud,
+  FileText,
   Loader2,
   RotateCcw,
   SendHorizonal,
@@ -21,6 +22,36 @@ import { workerDisplayLabel } from "../utils/workerLabel.js";
 
 const SCROLL_THRESHOLD = 80;
 const TEXTAREA_MAX_ROWS = 6;
+
+function routingHeaderMeta(routing, workerMetrics, workers) {
+  const summary = routing?.summary || "Idle — submit a task to route";
+  const total = workerMetrics?.total ?? workers?.length ?? 0;
+  if (total <= 0) return summary;
+
+  const local =
+    workerMetrics?.local ?? workers?.filter((w) => w.is_local).length ?? 0;
+  const cloud =
+    workerMetrics?.cloud ?? workers?.filter((w) => !w.is_local).length ?? 0;
+  return `${summary} · ${total} workers (${local}L / ${cloud}C)`;
+}
+
+function WorkerDots({ workers }) {
+  if (!workers?.length) return null;
+
+  return (
+    <div className="routing-worker-dots">
+      {workers.map((w) => (
+        <span
+          key={w.id}
+          className={`routing-worker-dot ${
+            w.status === "running" ? "routing-worker-dot-active" : ""
+          }`}
+          title={w.label || w.id}
+        />
+      ))}
+    </div>
+  );
+}
 
 function WorkerChip({ worker }) {
   const isRunning = worker.status === "running";
@@ -88,7 +119,6 @@ function RoutingFlow({
   localEnabled,
   cloudEnabled,
 }) {
-  const summary = routing?.summary ?? "Idle — submit a task to route";
   const localWorkers = (workers ?? []).filter((w) => w.is_local);
   const cloudWorkers = (workers ?? []).filter((w) => !w.is_local);
   const hasLocalWorkers = localWorkers.length > 0;
@@ -97,85 +127,77 @@ function RoutingFlow({
     localEnabled && (hasLocalWorkers || routing?.mode === 1);
   const asgardLit =
     cloudEnabled &&
-    (hasCloudWorkers || fallbackDetected || routing?.mode === 3);
+    (hasCloudWorkers || fallbackDetected || routing?.mode === 2 || routing?.mode === 3);
   const bridgeLit = midgardLit && asgardLit;
   const localCount = workerMetrics?.local ?? localWorkers.length;
   const cloudCount = workerMetrics?.cloud ?? cloudWorkers.length;
+  const workerTotal = workers?.length ?? 0;
 
   return (
-    <div className="glass-card overflow-hidden p-3">
-      <div className="mb-2 rounded-lg border border-bifrost/25 bg-bifrost/8 px-3 py-1.5">
-        <p className="truncate text-center text-xs font-medium text-white/80" title={summary}>
-          {summary}
-        </p>
-        {(workerMetrics?.total ?? workers?.length ?? 0) > 0 && (
-          <p className="mt-1 text-center font-mono text-[10px] text-bifrost/70">
-            {workerMetrics?.total ?? workers.length} workers
-            {localCount > 0 && ` · ${localCount} local`}
-            {cloudCount > 0 && ` · ${cloudCount} cloud`}
-          </p>
-        )}
-      </div>
-
-      <div className="flex items-stretch gap-2">
+    <div className="glass-card overflow-hidden p-2">
+      <div className="routing-compact-bridge flex items-stretch gap-1.5">
         <div
-          className={`flex w-[88px] shrink-0 flex-col items-center gap-2 px-2 py-3 transition-all duration-300 ${
+          className={`flex w-[76px] shrink-0 flex-col items-center gap-1 px-1.5 py-1.5 transition-all duration-300 ${
             midgardLit ? "glass-realm-card-active" : "glass-realm-card opacity-55"
           }`}
         >
-          <div className="flex h-10 w-10 items-center justify-center rounded-full border border-white/[0.08] bg-black/30 shadow-glass-inset">
+          <div className="flex h-8 w-8 items-center justify-center rounded-full border border-white/[0.08] bg-black/30 shadow-glass-inset">
             <Server
-              className={`h-4 w-4 ${midgardLit ? "text-bifrost" : "text-slate-500"}`}
+              className={`h-3.5 w-3.5 ${midgardLit ? "text-bifrost" : "text-slate-500"}`}
             />
           </div>
-          <div className="flex items-center gap-1 text-[11px] font-medium text-white/80">
-            <ArrowDown className="h-3 w-3 text-bifrost/80" />
+          <div className="flex items-center gap-0.5 text-[10px] font-medium text-white/80">
+            <ArrowDown className="h-2.5 w-2.5 text-bifrost/80" />
             Midgard
           </div>
           <span className="text-center text-[9px] text-white/45">
             {!localEnabled ? "off" : localCount > 0 ? `${localCount} active` : "Local"}
           </span>
+          <WorkerDots workers={localWorkers} />
         </div>
 
         <RoutingBridge active={bridgeLit || midgardLit || asgardLit} compact />
 
         <div
-          className={`flex w-[88px] shrink-0 flex-col items-center gap-2 px-2 py-3 transition-all duration-300 ${
+          className={`flex w-[76px] shrink-0 flex-col items-center gap-1 px-1.5 py-1.5 transition-all duration-300 ${
             asgardLit ? "glass-realm-card-active" : "glass-realm-card opacity-55"
           }`}
         >
-          <div className="flex h-10 w-10 items-center justify-center rounded-full border border-white/[0.08] bg-black/30 shadow-glass-inset">
+          <div className="flex h-8 w-8 items-center justify-center rounded-full border border-white/[0.08] bg-black/30 shadow-glass-inset">
             <Cloud
-              className={`h-4 w-4 ${asgardLit ? "text-bifrost" : "text-slate-500"}`}
+              className={`h-3.5 w-3.5 ${asgardLit ? "text-bifrost" : "text-slate-500"}`}
             />
           </div>
-          <div className="flex items-center gap-1 text-[11px] font-medium text-white/80">
-            <ArrowUp className="h-3 w-3 text-bifrost/80" />
+          <div className="flex items-center gap-0.5 text-[10px] font-medium text-white/80">
+            <ArrowUp className="h-2.5 w-2.5 text-bifrost/80" />
             Asgard
           </div>
           <span className="text-center text-[9px] text-white/45">
             {!cloudEnabled ? "off" : cloudCount > 0 ? `${cloudCount} active` : "Cloud"}
           </span>
+          <WorkerDots workers={cloudWorkers} />
         </div>
       </div>
 
-      {(workers?.length ?? 0) > 0 ? (
-        <div className="mt-3 grid max-h-[100px] gap-3 overflow-y-auto border-t border-white/[0.06] pt-3 scrollbar-thin sm:grid-cols-2">
-          <RealmWorkerColumn
-            title="Midgard"
-            workers={localWorkers}
-            emptyHint="Inga lokala workers"
-          />
-          <RealmWorkerColumn
-            title="Asgard"
-            workers={cloudWorkers}
-            emptyHint="Inga cloud-workers"
-          />
-        </div>
-      ) : (
-        <p className="mt-3 border-t border-white/[0.06] pt-3 text-center text-[11px] text-white/35">
-          Inga workers ännu — starta en uppgift
-        </p>
+      {workerTotal > 0 && (
+        <details className="routing-workers-details">
+          <summary>
+            Workers ({localCount}L · {cloudCount}C)
+            <ChevronDown className="routing-workers-chevron h-3 w-3 opacity-60" />
+          </summary>
+          <div className="routing-workers-grid grid gap-3 scrollbar-thin sm:grid-cols-2">
+            <RealmWorkerColumn
+              title="Midgard"
+              workers={localWorkers}
+              emptyHint="Inga lokala workers"
+            />
+            <RealmWorkerColumn
+              title="Asgard"
+              workers={cloudWorkers}
+              emptyHint="Inga cloud-workers"
+            />
+          </div>
+        </details>
       )}
     </div>
   );
@@ -376,10 +398,22 @@ export default function MainHub() {
       <div className="relative z-10 flex min-h-0 flex-1 flex-col p-4">
         <header className="mb-2 shrink-0">
           <div className="flex items-start justify-between gap-2">
-            <div>
-              <h1 className="text-base font-semibold tracking-tight text-white">
-                Bifrost Router & Playground
-              </h1>
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5">
+                <h1 className="text-base font-semibold tracking-tight text-white">
+                  Bifrost Router & Playground
+                </h1>
+                {payload?.log_path && (
+                  <button
+                    type="button"
+                    title={`Log: ${payload.log_path}`}
+                    className="rounded p-0.5 text-white/30 transition-colors hover:text-bifrost/70"
+                    aria-label={`Session log file: ${payload.log_path}`}
+                  >
+                    <FileText className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </div>
               <p className="text-xs text-white/45">
                 {running
                   ? `Running · ${payload?.phase ?? "…"}`
@@ -422,11 +456,6 @@ export default function MainHub() {
           {status && (
             <p className="mt-2 text-xs text-bifrost">{status}</p>
           )}
-          {payload?.log_path && (
-            <p className="mt-1 font-mono text-[10px] text-white/40">
-              Log: {payload.log_path}
-            </p>
-          )}
         </header>
 
         <MissionStrip
@@ -435,8 +464,16 @@ export default function MainHub() {
           running={running}
         />
 
-        <section className="mb-2 shrink-0">
-          <h2 className="section-label mb-2">Routing logic</h2>
+        <section className="mb-1.5 shrink-0">
+          <div
+            className="section-label mb-1.5 flex min-w-0 items-baseline gap-1.5"
+            title={routingHeaderMeta(payload?.routing, payload?.metrics?.workers, workers)}
+          >
+            <span className="shrink-0">Routing logic</span>
+            <span className="min-w-0 truncate font-normal normal-case tracking-normal text-white/45">
+              · {routingHeaderMeta(payload?.routing, payload?.metrics?.workers, workers)}
+            </span>
+          </div>
           <RoutingFlow
             routing={payload?.routing}
             workers={workers}
@@ -448,7 +485,7 @@ export default function MainHub() {
         </section>
 
         <section className="flex min-h-0 flex-1 flex-col">
-          <div className="mb-3 flex items-center justify-between gap-2">
+          <div className="mb-1 flex items-center justify-between gap-2 shrink-0">
             <h2 className="section-label">Agent activity</h2>
             {payload?.cost && (
               <span
@@ -463,7 +500,7 @@ export default function MainHub() {
             <div
               ref={feedRef}
               onScroll={handleFeedScroll}
-              className="chat-grid-bg mb-3 h-full min-h-[200px] overflow-y-auto p-4 scrollbar-thin"
+              className="chat-grid-bg h-full min-h-0 overflow-y-auto p-4 scrollbar-thin"
             >
               {costStopped && (
                 <div className="cap-banner mb-3">
@@ -523,7 +560,7 @@ export default function MainHub() {
             )}
           </div>
 
-          <div className="flex shrink-0 items-end gap-2">
+          <div className="mt-2 flex shrink-0 items-end gap-2">
             <div className="flex shrink-0 flex-col gap-1">
               <label
                 htmlFor="cost-cap"

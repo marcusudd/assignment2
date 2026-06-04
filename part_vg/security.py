@@ -5,8 +5,10 @@ All checks run BEFORE execution (VG.4).
 import re
 from pathlib import Path
 
+# Note: rm / rmdir / unlink are intentionally NOT here. Deletion inside the
+# workspace is allowed by policy; staying inside it is enforced by the
+# parent-traversal and external-path checks below, not by banning the command.
 _BLOCKED: list[tuple[str, str]] = [
-    (r"\brm\b.*-[rRfF]", "recursive/force delete"),
     (r"\bdd\b", "dd command"),
     (r"\bmkfs\b", "filesystem format"),
     (r"(?<!2)>\s*/dev/(?!null)", "write to device"),
@@ -27,6 +29,7 @@ _BLOCKED: list[tuple[str, str]] = [
         r"\$\{?(?:OPENROUTER_API_KEY|ANTHROPIC_API_KEY|API_KEY|SECRET|PASSWORD|TOKEN|PRIVATE_KEY)\}?",
         "secret variable expansion",
     ),
+    (r"\$\{?(?:HOME|OLDPWD)\}?", "home/external directory variable"),
     (r"(?:^|\s|['\"`])~[/\s~]|(?:^|\s|['\"`])~$", "home directory access"),
 ]
 
@@ -36,7 +39,6 @@ _ALLOWED_ABS_PREFIXES: tuple[str, ...] = (
     "/sbin/",
     "/lib/",
     "/opt/",
-    "/tmp/",
     "/dev/null",
 )
 
@@ -83,10 +85,18 @@ def _shell_separator_blocked(command: str) -> str | None:
     return None
 
 
+def _has_parent_traversal(command: str) -> bool:
+    """Block `..` path segments. Bash runs with cwd = workspace, so any parent
+    reference escapes it. Quotes are deliberately NOT stripped, so `rm "../x"`
+    is caught too."""
+    return re.search(r"""(?:^|[\s=:/'"])\.\.(?:[/\s'"]|$)""", command) is not None
+
+
 def _has_external_path(command: str, workspace_dir: str) -> bool:
     workspace = str(Path(workspace_dir).resolve())
     head = _strip_heredoc(command)
-    for m in re.finditer(r'(?:^|\s|[\'"`])(\/[^\s\'"`|&;,<>]+)', head):
+    # `*` (not `+`) so a bare "/" (root) is caught, e.g. `rm -rf /`.
+    for m in re.finditer(r'(?:^|\s|[\'"`])(\/[^\s\'"`|&;,<>]*)', head):
         path = m.group(1)
         if path.startswith(workspace):
             continue
@@ -97,11 +107,18 @@ def _has_external_path(command: str, workspace_dir: str) -> bool:
 
 
 def security_check(command: str, workspace_dir: str) -> str | None:
-    """Return a rejection reason if the command should be blocked, else None."""
+    """Return a rejection reason if the command should be blocked, else None.
+
+    Policy: the agent may freely create/edit/delete inside the workspace, but
+    must never reach outside it — no `..` traversal, no absolute paths outside
+    the workspace.
+    """
     sep = _shell_separator_blocked(command)
     if sep:
         return sep
     head = _strip_heredoc(command)
+    if _has_parent_traversal(head):
+        return "parent-directory traversal (.. escapes the workspace)"
     for pattern, reason in _BLOCKED:
         if re.search(pattern, head, re.IGNORECASE):
             return reason

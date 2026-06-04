@@ -76,6 +76,7 @@ class WorkerPlan:
     owned_files: list[str]
     backend_name: str   # "local" | "cloud"
     local_tier: str = "standard"  # "light" (boilerplate) | "standard" (logic)
+    sibling_files: list[str] = field(default_factory=list)
 
 
 class SubAgent:
@@ -385,6 +386,12 @@ class SubAgent:
                 "Do NOT explore the workspace or list files first — you already know your task. "
                 "You may read_file ONLY if you need to see an existing model/schema to "
                 "import from. Finish in as few steps as possible."
+            )
+        if self.plan.sibling_files:
+            files_note += (
+                f"\n\nOther workers in this run own: {', '.join(self.plan.sibling_files)}. "
+                "read_file those exact paths (include .py), e.g. models/order.py — "
+                "never read_file a directory name like models or schemas."
             )
         return self.plan.task + files_note
 

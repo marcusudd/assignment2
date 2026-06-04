@@ -1,16 +1,16 @@
 export default function RoutingBridge({ active = true, compact = false }) {
-  const h = compact ? 72 : 88;
-  const vw = compact ? 200 : 240;
+  const h = compact ? 56 : 88;
+  const vw = compact ? 180 : 240;
 
   return (
     <div
       className={`relative flex flex-1 items-center justify-center ${
-        compact ? "min-h-[72px]" : "min-h-[88px]"
+        compact ? "min-h-[56px]" : "min-h-[88px]"
       }`}
     >
       <svg
         viewBox={`0 0 ${vw} ${h}`}
-        className={`w-full max-w-[200px] ${active ? "animate-bridge-glow" : "opacity-40"}`}
+        className={`w-full ${compact ? "max-w-[160px]" : "max-w-[200px]"} ${active ? "animate-bridge-glow" : "opacity-40"}`}
         aria-hidden
       >
         <defs>

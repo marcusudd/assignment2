@@ -355,6 +355,101 @@
     background: rgba(57, 255, 20, 0.06);
   }
 
+  .routing-compact-bridge {
+    padding: 4px 6px;
+    gap: 4px;
+  }
+
+  .routing-compact-bridge .glass-realm-card,
+  .routing-compact-bridge .glass-realm-card-active {
+    border-radius: 10px;
+    padding: 6px 4px;
+  }
+
+  .routing-worker-dots {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 3px;
+    min-height: 8px;
+    margin-top: 2px;
+  }
+
+  .routing-worker-dot {
+    position: relative;
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.2);
+  }
+
+  .routing-worker-dot-active {
+    background: rgba(57, 255, 20, 0.85);
+    box-shadow: 0 0 6px rgba(57, 255, 20, 0.45);
+  }
+
+  .routing-worker-dot-active::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: 999px;
+    background: rgba(57, 255, 20, 0.5);
+    animation: ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite;
+  }
+
+  .routing-workers-details {
+    margin-top: 6px;
+    border: none;
+  }
+
+  .routing-workers-details:not([open]) {
+    margin-top: 0;
+  }
+
+  .routing-workers-details > summary {
+    list-style: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 4px 8px;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: rgba(255, 255, 255, 0.4);
+    user-select: none;
+  }
+
+  .routing-workers-details > summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .routing-workers-details > summary:hover {
+    color: rgba(57, 255, 20, 0.75);
+  }
+
+  .routing-workers-details .routing-workers-chevron {
+    transition: transform 0.2s ease;
+  }
+
+  .routing-workers-details[open] .routing-workers-chevron {
+    transform: rotate(180deg);
+  }
+
+  .routing-workers-details[open] > summary {
+    margin-bottom: 6px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    color: rgba(57, 255, 20, 0.7);
+  }
+
+  .routing-workers-details .routing-workers-grid {
+    max-height: 100px;
+    overflow-y: auto;
+  }
+
   .metric-glow-text {
     text-shadow:
       0 0 32px rgba(57, 255, 20, 0.55),

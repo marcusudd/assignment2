@@ -14,6 +14,7 @@ Flow:
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import replace
 from pathlib import Path
 
 from backends import BackendSpec
@@ -22,6 +23,24 @@ from cost import BudgetExceeded, CostTracker
 from router import Plan, Router
 from state import StateRegistry, WorkerState
 from subagent import SubAgent, WorkerPlan
+
+
+def _attach_sibling_files(workers: list[WorkerPlan]) -> list[WorkerPlan]:
+    """Tell each worker which files its siblings own (avoids read_file on directories)."""
+    if len(workers) <= 1:
+        return workers
+    enriched: list[WorkerPlan] = []
+    for wp in workers:
+        siblings: list[str] = []
+        for other in workers:
+            if other.worker_id == wp.worker_id:
+                continue
+            for path in other.owned_files:
+                if path and path not in siblings:
+                    siblings.append(path)
+        enriched.append(replace(wp, sibling_files=siblings))
+    return enriched
+
 
 _INTEGRATION_SYSTEM = """\
 You are a senior engineer doing an integration pass after parallel workers
@@ -103,6 +122,7 @@ class Orchestrator:
         """Top-level entry. Returns a plain-text result."""
         self.registry.set_phase("routing")
         self.plan = self.router.plan(task)
+        self.plan.workers = _attach_sibling_files(self.plan.workers)
         self.routing_summary = (
             f"Mode {self.plan.mode}: {self.plan.reasoning} "
             f"({len(self.plan.workers)} worker(s))"

@@ -30,7 +30,6 @@ COPY --from=frontend-build /build/frontend/dist ./frontend/dist
 RUN mkdir -p workspace logs sessions \
     && chmod +x scripts/reset_seed.sh
 
-ENV AUTO_APPROVE=true
 ENV PYTHONUNBUFFERED=1
 
 EXPOSE 8000

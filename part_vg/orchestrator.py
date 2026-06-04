@@ -121,7 +121,11 @@ class Orchestrator:
     def run(self, task: str) -> str:
         """Top-level entry. Returns a plain-text result."""
         self.registry.set_phase("routing")
-        self.plan = self.router.plan(task, allow_cloud=self.allow_cloud)
+        self.plan = self.router.plan(
+            task,
+            allow_cloud=self.allow_cloud,
+            allow_local=self.allow_local,
+        )
         self.plan.workers = _attach_sibling_files(self.plan.workers)
         self.routing_summary = (
             f"Mode {self.plan.mode}: {self.plan.reasoning} "

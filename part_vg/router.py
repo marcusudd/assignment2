@@ -101,7 +101,7 @@ class Router:
         self._cloud_base_url = cloud_base_url
         self._cloud_api_key = cloud_api_key
 
-    def plan(self, task: str, *, allow_cloud: bool = True) -> Plan:
+    def plan(self, task: str, *, allow_cloud: bool = True, allow_local: bool = True) -> Plan:
         if self._is_simple(task):
             used: dict[str, int] = {}
             return Plan(
@@ -128,7 +128,7 @@ class Router:
         if not allow_cloud:
             return self._fallback_mode2_local(task)
 
-        return self._cloud_decompose(task)
+        return self._cloud_decompose(task, allow_local=allow_local, allow_cloud=allow_cloud)
 
     # ------------------------------------------------------------------
     def _fast_decompose(self, task: str, *, allow_cloud: bool = True) -> Plan | None:
@@ -221,7 +221,9 @@ class Router:
         # Simple only if it looks read/search-like AND not a multi-file feature
         return has_simple and not has_multi
 
-    def _cloud_decompose(self, task: str) -> Plan:
+    def _cloud_decompose(
+        self, task: str, *, allow_local: bool = True, allow_cloud: bool = True
+    ) -> Plan:
         workspace_ctx = self._workspace_context()
         user_msg = (
             f"Task: {task}\n\n"
@@ -240,10 +242,14 @@ class Router:
 
         if response is None:
             print("[router] cloud decomposition failed — falling back to mode 2", file=sys.stderr)
-            return self._fallback_mode2(task)
+            return self._fallback_mode2(
+                task, allow_local=allow_local, allow_cloud=allow_cloud
+            )
 
         raw = (response.choices[0].message.content or "").strip()
-        return self._parse(raw, task)
+        return self._parse(
+            raw, task, allow_local=allow_local, allow_cloud=allow_cloud
+        )
 
     def _parse_json(self, raw: str) -> dict | None:
         cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw.strip(), flags=re.MULTILINE)
@@ -261,17 +267,28 @@ class Router:
                 pass
         return None
 
-    def _parse(self, raw: str, task: str) -> Plan:
+    def _parse(
+        self,
+        raw: str,
+        task: str,
+        *,
+        allow_local: bool = True,
+        allow_cloud: bool = True,
+    ) -> Plan:
         data = self._parse_json(raw)
         if data is None:
             print("[router] JSON parse error — falling back to mode 2", file=sys.stderr)
-            return self._fallback_mode2(task)
+            return self._fallback_mode2(
+                task, allow_local=allow_local, allow_cloud=allow_cloud
+            )
 
         mode = int(data.get("mode", 2))
         reasoning = data.get("reasoning", "")
         raw_workers = data.get("workers", [])
         if not raw_workers:
-            return self._fallback_mode2(task)
+            return self._fallback_mode2(
+                task, allow_local=allow_local, allow_cloud=allow_cloud
+            )
 
         # Validate disjoint file ownership (D2)
         all_files: list[str] = []
@@ -279,7 +296,9 @@ class Router:
             all_files.extend(w.get("owned_files", []))
         if len(all_files) != len(set(all_files)):
             print("[router] overlapping owned_files detected — falling back to mode 2", file=sys.stderr)
-            return self._fallback_mode2(task)
+            return self._fallback_mode2(
+                task, allow_local=allow_local, allow_cloud=allow_cloud
+            )
 
         used: dict[str, int] = {}
         workers = [
@@ -301,7 +320,15 @@ class Router:
         ]
         return Plan(mode=mode, reasoning=reasoning, workers=workers)
 
-    def _fallback_mode2(self, task: str) -> Plan:
+    def _fallback_mode2(
+        self, task: str, *, allow_local: bool = True, allow_cloud: bool = True
+    ) -> Plan:
+        """Mode 2 when decomposition fails — prefer Midgard when available."""
+        if allow_local:
+            return self._fallback_mode2_local(task)
+        return self._fallback_mode2_cloud(task)
+
+    def _fallback_mode2_cloud(self, task: str) -> Plan:
         used: dict[str, int] = {}
         return Plan(
             mode=2,

@@ -383,7 +383,7 @@ Verifierat via `python scripts/run_via_api.py` mot `http://localhost:8000` (Dock
 | 2    | Mode 2 cloud (ej omkört)  | —       | Se `test_2.txt` i eval ladder |
 | 3    | Mode 3, 1L/1C + integration | $0.048 | `/items`, 9 pytest pass     |
 | 4    | Mode 3, 3L/1C + integration | $0.305 | Hero orders, 31 pytest pass |
-| 5    | Mode 2, 0L/1C, cap stop   | $0.039  | ABORTED @ cap $0.02 (VG.3)  |
+| 5    | Mode 2, 1L/0C, cap stop   | —       | Efter fix: lokal fallback; cap-demo kan köras om |
 | säk  | Mode 1, 1L/0C             | $0.00   | `rm -rf` — modell vägrar (ej bash BLOCKED på Mode 1) |
 
 **Router (2026-06-04):** `--no-cloud` planerar nu **0C** i GUI (t.ex. `3L/0C` på hero om Asgard av).

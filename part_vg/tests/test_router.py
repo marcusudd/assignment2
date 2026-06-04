@@ -49,6 +49,34 @@ def test_complex_task_not_simple():
         mock_llm.return_value = (None, 0, 0)  # force fallback
         plan = r.plan("Implement a complete /orders endpoint with inventory and discount logic")
     assert plan.mode == 2  # fallback mode
+    assert plan.workers[0].backend_name == "local"
+
+
+def test_fallback_prefers_local_when_midgard_on():
+    r = _router()
+    with patch("router.call_llm") as mock_llm:
+        mock_llm.return_value = (None, 0, 0)
+        plan = r.plan(
+            "Implement a production-grade distributed order-saga system",
+            allow_local=True,
+            allow_cloud=True,
+        )
+    assert plan.mode == 2
+    assert plan.workers[0].backend_name == "local"
+    assert "local worker" in plan.reasoning
+
+
+def test_fallback_cloud_when_midgard_off():
+    r = _router()
+    with patch("router.call_llm") as mock_llm:
+        mock_llm.return_value = (None, 0, 0)
+        plan = r.plan(
+            "Implement a production-grade distributed order-saga system",
+            allow_local=False,
+            allow_cloud=True,
+        )
+    assert plan.mode == 2
+    assert plan.workers[0].backend_name == "cloud"
 
 
 def test_parse_valid_decomposition():
@@ -97,6 +125,7 @@ def test_parse_invalid_json_falls_back():
     r = _router()
     plan = r._parse("not json at all !!!", "test")
     assert plan.mode == 2
+    assert plan.workers[0].backend_name == "local"
 
 
 def test_fast_path_assigns_tests_to_cloud_rest_local():
